@@ -1,0 +1,467 @@
+import { useState, useEffect, useCallback } from "react";
+import { useTrust } from "../context/TrustContext";
+import { Trash2, BookOpen, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { cn } from "../lib/utils";
+
+const API = "http://localhost:8000";
+
+const PKR = (n) =>
+  "PKR " + Number(n ?? 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+
+const HIJRI_MONTHS = [
+  "Muharram", "Safar", "Rabi al-Awwal", "Rabi al-Thani",
+  "Jumada al-Awwal", "Jumada al-Thani", "Rajab", "Sha'ban",
+  "Ramadan", "Shawwal", "Dhu al-Qi'dah", "Dhu al-Hijjah",
+];
+
+const TODAY = new Date().toISOString().slice(0, 10);
+
+const EMPTY = {
+  date: TODAY,
+  hijri_day: "",
+  hijri_month: "",
+  hijri_year: "",
+  from_time: "",
+  to_time: "",
+  event_name: "",
+  milk_qty: "",
+  milk_price: "",
+  sugar_qty: "",
+  sugar_price: "",
+  tea_qty: "",
+  tea_price: "",
+  saffron: "",
+  cardamoms: "",
+  pistachios: "",
+  ice: "",
+  essence: "",
+  miscellaneous: "",
+  miscellaneous_desc: "",
+  lights_fans: "",
+  gas: "",
+  loud_speaker: "",
+  molana: "",
+};
+
+function n(v) { return parseFloat(v) || 0; }
+
+function calcTotal(f) {
+  return (
+    n(f.milk_qty) * n(f.milk_price) +
+    n(f.sugar_qty) * n(f.sugar_price) +
+    n(f.tea_qty) * n(f.tea_price) +
+    n(f.saffron) + n(f.cardamoms) + n(f.pistachios) +
+    n(f.ice) + n(f.essence) + n(f.miscellaneous) +
+    n(f.lights_fans) + n(f.gas) + n(f.loud_speaker) + n(f.molana)
+  );
+}
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function Toast({ toasts }) {
+  return (
+    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={cn(
+            "px-4 py-3 rounded-lg shadow-lg text-sm font-medium pointer-events-auto",
+            t.type === "error" ? "bg-red-600 text-white" : "bg-emerald-600 text-white"
+          )}
+        >
+          {t.msg}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ConfirmDialog({ bill, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4">
+        <div className="flex items-center gap-3 mb-4">
+          <AlertCircle className="w-6 h-6 text-red-500 shrink-0" />
+          <h3 className="font-semibold text-gray-900">Delete Bill?</h3>
+        </div>
+        <p className="text-sm text-gray-600 mb-6">
+          Bill #{bill.serial_no} for <strong>{bill.event_name || "—"}</strong> ({fmtDate(bill.date)}) will be permanently deleted.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
+          <button onClick={onConfirm} className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700">Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children, className }) {
+  return (
+    <div className={className}>
+      <label className="block text-xs font-medium text-gray-700 mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function NumInput({ value, onChange, placeholder = "0" }) {
+  return (
+    <input
+      type="number"
+      min="0"
+      step="0.01"
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+    />
+  );
+}
+
+export default function MajlisBillsPage() {
+  const { selectedTrust } = useTrust();
+  const [bills, setBills] = useState([]);
+  const [nextSerial, setNextSerial] = useState("001");
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [toasts, setToasts] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [form, setForm] = useState(EMPTY);
+  const [showForm, setShowForm] = useState(true);
+
+  const addToast = (msg, type = "success") => {
+    const id = Date.now();
+    setToasts((p) => [...p, { id, msg, type }]);
+    setTimeout(() => setToasts((p) => p.filter((t) => t.id !== id)), 3500);
+  };
+
+  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  const fetchBills = useCallback(async () => {
+    if (!selectedTrust) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/majlis?trust_id=${selectedTrust.id}`);
+      if (!res.ok) throw new Error();
+      setBills(await res.json());
+    } catch {
+      addToast("Failed to load bills", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedTrust]);
+
+  const fetchSerial = useCallback(async () => {
+    if (!selectedTrust) return;
+    try {
+      const res = await fetch(`${API}/api/majlis/next-serial?trust_id=${selectedTrust.id}`);
+      if (res.ok) setNextSerial((await res.json()).serial_no);
+    } catch { /* silent */ }
+  }, [selectedTrust]);
+
+  useEffect(() => {
+    fetchBills();
+    fetchSerial();
+  }, [fetchBills, fetchSerial]);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!selectedTrust) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API}/api/majlis`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trust_id: selectedTrust.id,
+          date: form.date,
+          hijri_day: form.hijri_day || null,
+          hijri_month: form.hijri_month || null,
+          hijri_year: form.hijri_year || null,
+          from_time: form.from_time || null,
+          to_time: form.to_time || null,
+          event_name: form.event_name || null,
+          milk_qty: n(form.milk_qty),
+          milk_price: n(form.milk_price),
+          sugar_qty: n(form.sugar_qty),
+          sugar_price: n(form.sugar_price),
+          tea_qty: n(form.tea_qty),
+          tea_price: n(form.tea_price),
+          saffron: n(form.saffron),
+          cardamoms: n(form.cardamoms),
+          pistachios: n(form.pistachios),
+          ice: n(form.ice),
+          essence: n(form.essence),
+          miscellaneous: n(form.miscellaneous),
+          miscellaneous_desc: form.miscellaneous_desc || null,
+          lights_fans: n(form.lights_fans),
+          gas: n(form.gas),
+          loud_speaker: n(form.loud_speaker),
+          molana: n(form.molana),
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? "Failed");
+      addToast("Bill recorded successfully");
+      setForm(EMPTY);
+      fetchBills();
+      fetchSerial();
+    } catch (err) {
+      addToast(err.message, "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    try {
+      const res = await fetch(`${API}/api/majlis/${deleteTarget.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setBills((p) => p.filter((b) => b.id !== deleteTarget.id));
+      addToast("Bill deleted");
+      fetchSerial();
+    } catch {
+      addToast("Failed to delete", "error");
+    } finally {
+      setDeleteTarget(null);
+    }
+  }
+
+  const total = calcTotal(form);
+
+  return (
+    <div className="space-y-6">
+      <Toast toasts={toasts} />
+      {deleteTarget && (
+        <ConfirmDialog bill={deleteTarget} onConfirm={handleDelete} onCancel={() => setDeleteTarget(null)} />
+      )}
+
+      {/* ── Entry Form ─────────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+        <button
+          type="button"
+          onClick={() => setShowForm((s) => !s)}
+          className="w-full flex items-center gap-3 px-6 py-4 border-b border-gray-100 text-left"
+        >
+          <BookOpen className="w-5 h-5 text-emerald-600" />
+          <h2 className="text-base font-semibold text-gray-900 flex-1">New Majlis Bill</h2>
+          <span className="text-xs text-gray-400 font-mono bg-gray-100 px-2 py-1 rounded">#{nextSerial}</span>
+          {showForm ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+        </button>
+
+        {showForm && (
+          <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            {/* Date + Hijri + Event */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Field label="Date *">
+                <input type="date" value={form.date} onChange={set("date")} required
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </Field>
+              <Field label="Event / Donor Name">
+                <input type="text" value={form.event_name} onChange={set("event_name")} placeholder="Name"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </Field>
+              <Field label="Time">
+                <div className="flex gap-2">
+                  <input type="text" value={form.from_time} onChange={set("from_time")} placeholder="From"
+                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  <input type="text" value={form.to_time} onChange={set("to_time")} placeholder="To"
+                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+              </Field>
+            </div>
+
+            {/* Hijri date */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Field label="Hijri Day">
+                <input type="number" min="1" max="30" value={form.hijri_day} onChange={set("hijri_day")} placeholder="1–30"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </Field>
+              <Field label="Hijri Month">
+                <select value={form.hijri_month} onChange={set("hijri_month")}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                  <option value="">Select…</option>
+                  {HIJRI_MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
+              <Field label="Hijri Year">
+                <input type="number" min="1400" max="1500" value={form.hijri_year} onChange={set("hijri_year")} placeholder="e.g. 1446"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </Field>
+            </div>
+
+            {/* Beverages section */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Beverages</p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Milk */}
+                <div className="p-3 bg-gray-50 rounded-lg space-y-2">
+                  <p className="text-xs font-medium text-gray-600">Milk</p>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="text-xs text-gray-500">Qty (L)</label>
+                      <NumInput value={form.milk_qty} onChange={set("milk_qty")} />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs text-gray-500">Price/L</label>
+                      <NumInput value={form.milk_price} onChange={set("milk_price")} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-right text-emerald-700 font-medium">{PKR(n(form.milk_qty) * n(form.milk_price))}</p>
+                </div>
+                {/* Sugar */}
+                <div className="p-3 bg-gray-50 rounded-lg space-y-2">
+                  <p className="text-xs font-medium text-gray-600">Sugar</p>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="text-xs text-gray-500">Qty (kg)</label>
+                      <NumInput value={form.sugar_qty} onChange={set("sugar_qty")} />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs text-gray-500">Price/kg</label>
+                      <NumInput value={form.sugar_price} onChange={set("sugar_price")} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-right text-emerald-700 font-medium">{PKR(n(form.sugar_qty) * n(form.sugar_price))}</p>
+                </div>
+                {/* Tea */}
+                <div className="p-3 bg-gray-50 rounded-lg space-y-2">
+                  <p className="text-xs font-medium text-gray-600">Tea</p>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="text-xs text-gray-500">Qty (g)</label>
+                      <NumInput value={form.tea_qty} onChange={set("tea_qty")} />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs text-gray-500">Price/g</label>
+                      <NumInput value={form.tea_price} onChange={set("tea_price")} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-right text-emerald-700 font-medium">{PKR(n(form.tea_qty) * n(form.tea_price))}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Spices / Extras */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Spices & Extras</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Field label="Saffron (PKR)"><NumInput value={form.saffron} onChange={set("saffron")} /></Field>
+                <Field label="Cardamoms (PKR)"><NumInput value={form.cardamoms} onChange={set("cardamoms")} /></Field>
+                <Field label="Pistachios (PKR)"><NumInput value={form.pistachios} onChange={set("pistachios")} /></Field>
+                <Field label="Ice (PKR)"><NumInput value={form.ice} onChange={set("ice")} /></Field>
+                <Field label="Essence (PKR)"><NumInput value={form.essence} onChange={set("essence")} /></Field>
+                <Field label="Miscellaneous (PKR)"><NumInput value={form.miscellaneous} onChange={set("miscellaneous")} /></Field>
+                <Field label="Misc. Description" className="md:col-span-2">
+                  <input type="text" value={form.miscellaneous_desc} onChange={set("miscellaneous_desc")} placeholder="Description"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                </Field>
+              </div>
+            </div>
+
+            {/* Services */}
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Services & Utilities</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Field label="Lights & Fans (PKR)"><NumInput value={form.lights_fans} onChange={set("lights_fans")} /></Field>
+                <Field label="Gas (PKR)"><NumInput value={form.gas} onChange={set("gas")} /></Field>
+                <Field label="Loud Speaker (PKR)"><NumInput value={form.loud_speaker} onChange={set("loud_speaker")} /></Field>
+                <Field label="Molana Hadya (PKR)"><NumInput value={form.molana} onChange={set("molana")} /></Field>
+              </div>
+            </div>
+
+            {/* Total + Submit */}
+            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+              <div>
+                <span className="text-xs text-gray-500">Total Bill</span>
+                <p className="text-xl font-bold text-emerald-700">{PKR(total)}</p>
+              </div>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="px-6 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+              >
+                {submitting ? "Saving…" : "Record Bill"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* ── History Table ─────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-semibold text-gray-900">
+            Bill History
+            {!loading && <span className="ml-2 text-xs font-normal text-gray-400">({bills.length})</span>}
+          </h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">#</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Date</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Hijri Date</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Event / Donor</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Time</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Milk</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Sugar</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Tea</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Total</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {loading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <tr key={i} className="animate-pulse">
+                    {Array.from({ length: 10 }).map((__, j) => (
+                      <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-200 rounded" /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : bills.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-6 py-12 text-center text-gray-400">
+                    <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                    <p className="font-medium">No bills recorded yet</p>
+                  </td>
+                </tr>
+              ) : (
+                bills.map((b) => (
+                  <tr key={b.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 font-mono text-gray-500">{b.serial_no}</td>
+                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{fmtDate(b.date)}</td>
+                    <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
+                      {b.hijri_day && b.hijri_month ? `${b.hijri_day} ${b.hijri_month} ${b.hijri_year ?? ""}` : "—"}
+                    </td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{b.event_name || "—"}</td>
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                      {b.from_time && b.to_time ? `${b.from_time} – ${b.to_time}` : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-600">{b.milk_total ? PKR(b.milk_total) : "—"}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{b.sugar_total ? PKR(b.sugar_total) : "—"}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{b.tea_total ? PKR(b.tea_total) : "—"}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-emerald-700">{PKR(b.total_amount)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button onClick={() => setDeleteTarget(b)}
+                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}

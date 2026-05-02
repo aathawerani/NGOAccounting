@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+openpyxl
+xlrd
+python-docx
+hijri-converter
+python-multipart
+aiofiles
