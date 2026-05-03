@@ -4,8 +4,14 @@ import { Trash2, TrendingUp, AlertCircle, PlusCircle, DollarSign, CheckCircle } 
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
-const CERT_TYPES = ["SSC", "DSC", "BEH", "BSC"];
+const CERT_TYPES = ["SSC", "DSC", "BEH", "BSC", "TERM"];
 const TODAY = new Date().toISOString().slice(0, 10);
+
+// Account codes that represent investments (certificates or term deposits)
+const isInvestmentAccount = (a) =>
+  a.is_certificate ||
+  a.account_code === "TERM" ||
+  a.account_code.startsWith("TERM");
 
 const PKR = (n) =>
   "PKR " + Number(n ?? 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -220,6 +226,7 @@ function ConfirmDialog({ inv, onConfirm, onCancel }) {
 export default function InvestmentsPage() {
   const { selectedTrust } = useTrust();
   const [investments, setInvestments] = useState([]);
+  const [certLedgers, setCertLedgers] = useState([]); // [{ code, name, balance, entries }]
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [toasts, setToasts] = useState([]);
@@ -233,6 +240,31 @@ export default function InvestmentsPage() {
     setToasts((p) => [...p, { id, msg, type }]);
     setTimeout(() => setToasts((p) => p.filter((t) => t.id !== id)), 3500);
   };
+
+  const fetchCertLedgers = useCallback(async () => {
+    if (!selectedTrust) return;
+    try {
+      const typesRes = await fetch(`${API}/api/accounts/types?trust_id=${selectedTrust.id}`);
+      if (!typesRes.ok) return;
+      const types = await typesRes.json();
+      const certTypes = types.filter(isInvestmentAccount);
+      const ledgers = await Promise.all(
+        certTypes.map(async (a) => {
+          try {
+            const res = await fetch(
+              `${API}/api/accounts/ledger?trust_id=${selectedTrust.id}&account_code=${encodeURIComponent(a.account_code)}`
+            );
+            if (!res.ok) return { ...a, balance: 0, entryCount: 0 };
+            const d = await res.json();
+            return { ...a, balance: d.balance, entryCount: d.entries.length };
+          } catch {
+            return { ...a, balance: 0, entryCount: 0 };
+          }
+        })
+      );
+      setCertLedgers(ledgers);
+    } catch { /* silent */ }
+  }, [selectedTrust]);
 
   const fetchInvestments = useCallback(async () => {
     if (!selectedTrust) return;
@@ -250,7 +282,7 @@ export default function InvestmentsPage() {
     }
   }, [selectedTrust, filterType, includeMatured]);
 
-  useEffect(() => { fetchInvestments(); }, [fetchInvestments]);
+  useEffect(() => { fetchInvestments(); fetchCertLedgers(); }, [fetchInvestments, fetchCertLedgers]);
 
   async function handlePurchase(form) {
     setSubmitting(true);
@@ -359,22 +391,66 @@ export default function InvestmentsPage() {
         <ConfirmDialog inv={activeInv} onConfirm={handleDelete} onCancel={() => setModal(null)} />
       )}
 
-      {/* ── Summary card ──────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex flex-wrap items-center gap-4">
-        <TrendingUp className="w-8 h-8 text-emerald-600 shrink-0" />
-        <div>
-          <p className="text-xs text-gray-500">Active Portfolio Value</p>
-          <p className="text-2xl font-bold text-gray-900">{PKR(totalActive)}</p>
-        </div>
-        <div className="ml-auto">
-          <button
-            onClick={() => setModal("purchase")}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700"
-          >
-            <PlusCircle className="w-4 h-4" /> Purchase Certificate
-          </button>
+      {/* ── Summary cards ─────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap gap-4">
+        {/* Active portfolio total */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 flex items-center gap-4 flex-1 min-w-56">
+          <TrendingUp className="w-8 h-8 text-emerald-600 shrink-0" />
+          <div>
+            <p className="text-xs text-gray-500">Active Portfolio Value</p>
+            <p className="text-2xl font-bold text-gray-900">{PKR(totalActive)}</p>
+          </div>
+          <div className="ml-auto">
+            <button
+              onClick={() => setModal("purchase")}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700"
+            >
+              <PlusCircle className="w-4 h-4" /> Purchase Certificate
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* ── Certificate ledger balances ────────────────────────────────────── */}
+      {certLedgers.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+          <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-100">
+            <DollarSign className="w-4 h-4 text-blue-600" />
+            <h3 className="text-sm font-semibold text-gray-800">Investment Account Balances (Ledger)</h3>
+            <span className="ml-auto text-xs text-gray-400">from journal entries</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-y divide-gray-100">
+            {certLedgers.map((a) => {
+              const portfolioForType = investments
+                .filter((i) => i.status === "ACTIVE" && i.certificate_type === a.account_code)
+                .reduce((s, i) => s + i.amount, 0);
+              const diff = a.balance - portfolioForType;
+              return (
+                <div key={a.account_code} className="p-4">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded font-mono">
+                      {a.account_code}
+                    </span>
+                    <span className="text-xs text-gray-500 truncate">{a.account_name}</span>
+                  </div>
+                  <p className="text-lg font-bold text-gray-900">{PKR(a.balance)}</p>
+                  <p className="text-xs text-gray-400">{a.entryCount} ledger entries</p>
+                  {portfolioForType > 0 && (
+                    <p className={cn(
+                      "text-xs mt-1 font-medium",
+                      Math.abs(diff) < 1 ? "text-emerald-600" : "text-amber-600"
+                    )}>
+                      {Math.abs(diff) < 1
+                        ? "Balanced with portfolio"
+                        : `${diff > 0 ? "+" : ""}${PKR(diff)} vs portfolio`}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Filter bar ────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-3">

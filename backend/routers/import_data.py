@@ -1,5 +1,5 @@
 """
-WPF Excel import — reads the exact format produced by the WPF accounting software.
+WPF Excel import — smart sync edition (v2).
 
 Sheet layout (0-indexed Python rows / columns):
   row 0-1  : empty
@@ -14,18 +14,20 @@ Sheet layout (0-indexed Python rows / columns):
   row 10-11: empty
   row 12+  : transaction data (skip rows where col[0] DATE is empty)
 
-Summary sheets to skip: TB, IS, BS, DEP SCH (and variants)
-
-Double-entry semantics:
-  current sheet's account_code  → LedgerEntry.account_code
-  col[2] (ACCOUNT CODE column)  → LedgerEntry.contra_account_code
-  col[5] DEBIT / col[6] CREDIT  → as stored
+Smart-sync rules:
+  import_hash = MD5(f"{trust_id}|{account_code}|{particulars[:50]}")
+  INSERT  : hash not found in DB
+  UPDATE  : hash found, any of date/debit/credit/receipt_no/party_name/contra changed
+  FLAG    : hash in DB but not in file  → is_deleted=True (never hard-deleted)
+  RESTORE : hash was is_deleted=True, now re-appears → is_deleted=False
 """
 
-from io import BytesIO
-from datetime import datetime, date as date_cls
-from typing import Optional
+import hashlib
+import json
 import uuid
+from datetime import datetime, date as date_cls
+from io import BytesIO
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -35,12 +37,10 @@ from models.models import AccountType, LedgerEntry, Tenant, Trust
 
 router = APIRouter(prefix="/api/import", tags=["import"])
 
-# ── Sheet-skip list ───────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 _SKIP = {"TB", "IS", "BS", "DEP SCH", "DEP SCHEDULE", "DEP.SCH", "DEP. SCH",
          "DEPRECIATION SCHEDULE"}
-
-# ── Column positions (0-indexed) in transaction rows ─────────────────────────
 
 _C_DATE        = 0
 _C_VOUCHER     = 1
@@ -50,16 +50,15 @@ _C_PARTICULARS = 4
 _C_DEBIT       = 5
 _C_CREDIT      = 6
 
-# ── Header-scan positions (0-indexed) ────────────────────────────────────────
+_H_LABEL_COL = 1
+_H_VALUE_COL = 4
 
-_H_LABEL_COL = 1   # "NAME OF ACCOUNT :" lives in col[1]
-_H_VALUE_COL = 4   # account_name / type / code live in col[4]
-
-# Transaction data starts at this 0-indexed row (fallback if scan fails)
 _DEFAULT_DATA_ROW = 12
 
+_SKIP_TENANT_VALUES = {"NAME OF TENANT", "TENANT", "PARTY", "NAME", ""}
 
-# ── Low-level value helpers ───────────────────────────────────────────────────
+
+# ── Low-level helpers ─────────────────────────────────────────────────────────
 
 def _s(v) -> Optional[str]:
     if v is None:
@@ -78,7 +77,6 @@ def _f(v) -> float:
 
 
 def _d(v, datemode: int = 0) -> Optional[date_cls]:
-    """Convert any cell value to a Python date. Handles xlrd floats and strings."""
     if v is None:
         return None
     if isinstance(v, date_cls):
@@ -103,6 +101,12 @@ def _d(v, datemode: int = 0) -> Optional[date_cls]:
     return None
 
 
+def _make_hash(trust_id: int, account_code: str, particulars: Optional[str]) -> str:
+    """Soft upsert key: same account + same description = same row."""
+    raw = f"{trust_id}|{account_code}|{(particulars or '')[:50]}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
 # ── Workbook reader ───────────────────────────────────────────────────────────
 
 class _Sheet:
@@ -113,7 +117,6 @@ class _Sheet:
 
 
 def _load(content: bytes, filename: str) -> list[_Sheet]:
-    """Parse .xls or .xlsx into a list of _Sheet objects."""
     if filename.lower().endswith(".xls"):
         try:
             import xlrd
@@ -159,10 +162,9 @@ def _load(content: bytes, filename: str) -> list[_Sheet]:
             raise HTTPException(400, f"Cannot open .xlsx file: {e}")
 
 
-# ── WPF sheet header parser ───────────────────────────────────────────────────
+# ── Header / transaction parsers ─────────────────────────────────────────────
 
 def _parse_header(rows: list[list]) -> dict:
-    """Scan first 13 rows for account metadata labels."""
     meta = {"account_name": None, "account_type": None, "account_code": None}
     for row in rows[:13]:
         if not row or len(row) <= _H_VALUE_COL:
@@ -179,20 +181,48 @@ def _parse_header(rows: list[list]) -> dict:
 
 
 def _data_start(rows: list[list]) -> int:
-    """Find the row index of the DATE column header, return data-start index."""
     for i, row in enumerate(rows[:16]):
         if row and str(row[0] or "").strip().upper() == "DATE":
-            return i + 3   # data starts 3 rows after the header row
+            return i + 3
     return _DEFAULT_DATA_ROW
 
 
-# ── Tenant detection ──────────────────────────────────────────────────────────
+def _parse_transactions(sheet: _Sheet, account_code: str) -> tuple[list[dict], list[str]]:
+    rows = sheet.rows
+    start = _data_start(rows)
+    txns: list[dict] = []
+    tenant_names: list[str] = []
+    is_rt = _is_rent_water(account_code)
 
-_SKIP_TENANT_VALUES = {"NAME OF TENANT", "TENANT", "PARTY", "NAME", ""}
+    for row in rows[start:]:
+        if not row:
+            continue
+        if all(v is None or str(v).strip() == "" for v in row):
+            continue
+        dt = _d(row[_C_DATE] if len(row) > _C_DATE else None, sheet.datemode)
+        if dt is None:
+            continue
 
+        tenant = _s(row[_C_TENANT] if len(row) > _C_TENANT else None)
+        if is_rt and tenant and tenant.upper() not in _SKIP_TENANT_VALUES:
+            tenant_names.append(tenant)
+
+        txns.append({
+            "date":                dt,
+            "receipt_no":          _s(row[_C_VOUCHER]     if len(row) > _C_VOUCHER     else None),
+            "contra_account_code": _s(row[_C_CONTRA]      if len(row) > _C_CONTRA      else None),
+            "party_name":          tenant,
+            "particulars":         _s(row[_C_PARTICULARS] if len(row) > _C_PARTICULARS else None),
+            "debit":               _f(row[_C_DEBIT]       if len(row) > _C_DEBIT       else 0),
+            "credit":              _f(row[_C_CREDIT]      if len(row) > _C_CREDIT      else 0),
+        })
+
+    return txns, list(dict.fromkeys(tenant_names))
+
+
+# ── Tenant helpers ────────────────────────────────────────────────────────────
 
 def _is_rent_water(code: str) -> bool:
-    """True for rent/water income sheets: R46GK7, W2BR1, RGK6, WGK6 etc."""
     if not code or len(code) < 2:
         return False
     prefix, second = code[0].upper(), code[1].upper()
@@ -204,7 +234,6 @@ def _is_rent_water(code: str) -> bool:
 
 
 def _plot_from_code(code: str) -> Optional[str]:
-    """R46GK7 → 46GK7,  W2BR1 → 2BR1"""
     return code[1:] if code and len(code) > 1 else None
 
 
@@ -218,7 +247,6 @@ _TRUST_KEYWORDS: list[tuple[set, str]] = [
 
 
 def _extract_trust_name(sheets: list[_Sheet]) -> Optional[str]:
-    """Try to read the trust name from TB / IS / BS summary sheets."""
     for sh in sheets:
         uname = sh.name.strip().upper()
         rows = sh.rows
@@ -243,7 +271,6 @@ def _extract_trust_name(sheets: list[_Sheet]) -> Optional[str]:
 
 
 def _match_trust_keyword(detected: Optional[str], db: Session) -> Optional[dict]:
-    """Keyword-match a detected name against known trust codes."""
     if not detected:
         return None
     upper = detected.upper()
@@ -255,41 +282,103 @@ def _match_trust_keyword(detected: Optional[str], db: Session) -> Optional[dict]
     return None
 
 
-# ── Transaction parser ────────────────────────────────────────────────────────
+# ── Date validation ───────────────────────────────────────────────────────────
 
-def _parse_transactions(sheet: _Sheet, account_code: str) -> tuple[list[dict], list[str]]:
-    """Return (transactions, unique_tenant_names)."""
-    rows = sheet.rows
-    start = _data_start(rows)
-    txns: list[dict] = []
-    tenant_names: list[str] = []
-    is_rt = _is_rent_water(account_code)
+def _validate_entries(trust_id: int, db: Session) -> int:
+    """Run validation pass on all non-deleted entries; store JSON warnings. Returns count with warnings."""
+    today = date_cls.today()
 
-    for row in rows[start:]:
-        if not row:
+    # Build receipt_no → dates map for spread check
+    from sqlalchemy import and_
+    entries = (
+        db.query(LedgerEntry)
+        .filter(
+            LedgerEntry.trust_id == trust_id,
+            LedgerEntry.is_deleted == False,
+        )
+        .all()
+    )
+
+    receipt_dates: dict[str, list[date_cls]] = {}
+    for e in entries:
+        if e.receipt_no and e.date:
+            receipt_dates.setdefault(e.receipt_no, []).append(e.date)
+
+    warning_count = 0
+    for e in entries:
+        warns: list[str] = []
+        if e.date:
+            if e.date > today:
+                warns.append("future_date")
+            if e.date.year < 2000:
+                warns.append("date_too_old")
+            if e.receipt_no:
+                dates = receipt_dates.get(e.receipt_no, [])
+                if len(dates) > 1:
+                    span = (max(dates) - min(dates)).days
+                    if span > 30:
+                        warns.append(f"voucher_spread_{span}d")
+
+        new_val = json.dumps(warns) if warns else None
+        if e.validation_warnings != new_val:
+            e.validation_warnings = new_val
+        if warns:
+            warning_count += 1
+
+    db.commit()
+    return warning_count
+
+
+# ── Tenant sync ───────────────────────────────────────────────────────────────
+
+def _sync_tenants(trust_id: int, db: Session) -> tuple[int, int]:
+    """Re-extract tenants from active rent/water contra entries; upsert by name."""
+    entries = (
+        db.query(LedgerEntry)
+        .filter(
+            LedgerEntry.trust_id == trust_id,
+            LedgerEntry.party_name != None,
+            LedgerEntry.party_name != "",
+            LedgerEntry.is_deleted == False,
+        )
+        .all()
+    )
+
+    name_to_plot: dict[str, str] = {}
+    for e in entries:
+        if not _is_rent_water(e.contra_account_code or ""):
             continue
-        # Skip blank rows
-        if all(v is None or str(v).strip() == "" for v in row):
+        tname = (e.party_name or "").strip()
+        if not tname or tname.upper() in _SKIP_TENANT_VALUES:
             continue
-        dt = _d(row[_C_DATE] if len(row) > _C_DATE else None, sheet.datemode)
-        if dt is None:
-            continue   # not a valid transaction row
+        plot = _plot_from_code(e.contra_account_code) or ""
+        name_to_plot[tname] = plot
 
-        tenant = _s(row[_C_TENANT] if len(row) > _C_TENANT else None)
-        if is_rt and tenant and tenant.upper() not in _SKIP_TENANT_VALUES:
-            tenant_names.append(tenant)
+    added = updated = 0
+    for tname, plot in name_to_plot.items():
+        existing = (
+            db.query(Tenant)
+            .filter(Tenant.trust_id == trust_id, Tenant.name == tname)
+            .first()
+        )
+        if existing:
+            if existing.plot_code != plot and plot:
+                existing.plot_code = plot
+                updated += 1
+        else:
+            db.add(Tenant(
+                trust_id=trust_id,
+                name=tname,
+                plot_code=plot or None,
+                space_type="SHOP",
+                monthly_rent=0.0,
+                water_charge=0.0,
+                is_active=True,
+            ))
+            added += 1
 
-        txns.append({
-            "date":                dt,
-            "receipt_no":          _s(row[_C_VOUCHER]     if len(row) > _C_VOUCHER     else None),
-            "contra_account_code": _s(row[_C_CONTRA]      if len(row) > _C_CONTRA      else None),
-            "party_name":          tenant,
-            "particulars":         _s(row[_C_PARTICULARS] if len(row) > _C_PARTICULARS else None),
-            "debit":               _f(row[_C_DEBIT]       if len(row) > _C_DEBIT       else 0),
-            "credit":              _f(row[_C_CREDIT]      if len(row) > _C_CREDIT      else 0),
-        })
-
-    return txns, list(dict.fromkeys(tenant_names))   # preserve order, dedupe
+    db.commit()
+    return added, updated
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -299,7 +388,6 @@ async def detect_trust(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    """Read the file, extract trust name from summary sheets, return keyword match."""
     if not file.filename.lower().endswith((".xls", ".xlsx")):
         raise HTTPException(400, "Only .xls and .xlsx files are supported")
     content = await file.read()
@@ -308,7 +396,7 @@ async def detect_trust(
     matched = _match_trust_keyword(detected_name, db)
     all_trusts = db.query(Trust).order_by(Trust.code).all()
     return {
-        "detected_name":     detected_name,
+        "detected_name":      detected_name,
         "matched_trust_id":   matched["id"]   if matched else None,
         "matched_trust_code": matched["code"] if matched else None,
         "matched_trust_name": matched["name"] if matched else None,
@@ -318,17 +406,31 @@ async def detect_trust(
 
 
 @router.post("/preview")
-async def preview(trust_id: int = Form(...), file: UploadFile = File(...)):
+async def preview(
+    trust_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
     if not file.filename.lower().endswith((".xls", ".xlsx")):
         raise HTTPException(400, "Only .xls and .xlsx files are supported")
 
     content = await file.read()
     sheets = _load(content, file.filename)
 
+    # Load all existing hashes for this trust grouped by account_code
+    existing_by_acct: dict[str, dict[str, list]] = {}
+    for e in db.query(LedgerEntry).filter(
+        LedgerEntry.trust_id == trust_id,
+        LedgerEntry.import_hash != None,
+        LedgerEntry.is_deleted == False,
+    ).all():
+        existing_by_acct.setdefault(e.account_code, {}).setdefault(e.import_hash, []).append(e)
+
     skipped: list[str] = []
     accounts: list[dict] = []
     all_tenants: list[dict] = []
     total_txns = 0
+    total_est_inserts = total_est_updates = total_est_flags = 0
 
     for sh in sheets:
         if sh.name.strip().upper() in _SKIP:
@@ -345,28 +447,64 @@ async def preview(trust_id: int = Form(...), file: UploadFile = File(...)):
             for t in tenants:
                 all_tenants.append({"name": t, "plot_code": plot})
 
+        # Sync analysis for this account
+        existing_hashes = existing_by_acct.get(code, {})
+        seen: dict[str, int] = {}  # hash -> count in file
+        for txn in txns:
+            h = _make_hash(trust_id, code, txn["particulars"])
+            seen[h] = seen.get(h, 0) + 1
+
+        est_inserts = est_updates = est_flags = 0
+        # Compare file hashes vs existing hashes
+        consumed: dict[str, int] = {}
+        for h, file_count in seen.items():
+            db_entries = existing_hashes.get(h, [])
+            for i in range(file_count):
+                if i < len(db_entries):
+                    est_updates += 1
+                else:
+                    est_inserts += 1
+            consumed[h] = file_count
+
+        for h, db_entries in existing_hashes.items():
+            used = consumed.get(h, 0)
+            leftover = len(db_entries) - used
+            if leftover > 0:
+                est_flags += leftover
+
+        total_est_inserts += est_inserts
+        total_est_updates += est_updates
+        total_est_flags   += est_flags
+
         accounts.append({
             "sheet":             sh.name,
             "account_code":      code,
             "account_name":      meta["account_name"] or code,
             "account_type":      meta["account_type"] or "UNKNOWN",
             "transaction_count": len(txns),
+            "est_inserts":       est_inserts,
+            "est_updates":       est_updates,
+            "est_flags":         est_flags,
         })
 
-    # Dedupe tenants by name
-    seen: dict[str, dict] = {}
+    seen_tenants: dict[str, dict] = {}
     for t in all_tenants:
-        seen.setdefault(t["name"], t)
+        seen_tenants.setdefault(t["name"], t)
 
     return {
         "total_sheets":       len(sheets),
         "sheets_skipped":     skipped,
         "accounts_found":     len(accounts),
         "transactions_found": total_txns,
-        "tenants_found":      len(seen),
-        "accounts":           accounts,
-        "tenants":            list(seen.values()),
-        "warnings":           [],
+        "tenants_found":      len(seen_tenants),
+        "sync_analysis": {
+            "estimated_inserts": total_est_inserts,
+            "estimated_updates": total_est_updates,
+            "estimated_flags":   total_est_flags,
+        },
+        "accounts":  accounts,
+        "tenants":   list(seen_tenants.values()),
+        "warnings":  [],
     }
 
 
@@ -378,17 +516,14 @@ async def execute_import(
 ):
     if not db.query(Trust).filter(Trust.id == trust_id).first():
         raise HTTPException(404, "Trust not found")
-
     if not file.filename.lower().endswith((".xls", ".xlsx")):
         raise HTTPException(400, "Only .xls and .xlsx files are supported")
 
     content = await file.read()
     sheets = _load(content, file.filename)
 
-    accounts_created = 0
-    accounts_updated = 0
-    transactions_imported = 0
-    tenants_upserted = 0
+    accounts_created = accounts_updated = 0
+    total_inserted = total_updated = total_flagged = total_restored = 0
     errors: list[str] = []
     log: list[dict] = []
 
@@ -397,27 +532,25 @@ async def execute_import(
             log.append({"type": "skip", "sheet": sh.name})
             continue
 
-        meta = _parse_header(sh.rows)
+        meta  = _parse_header(sh.rows)
         code  = meta["account_code"] or sh.name.strip()
         name  = meta["account_name"] or code
         atype = meta["account_type"] or "ASSET"
 
-        # ── Upsert account type ──────────────────────────────────────────────
+        # Upsert account type
         try:
-            existing = (
+            existing_acct = (
                 db.query(AccountType)
                 .filter(AccountType.trust_id == trust_id, AccountType.account_code == code)
                 .first()
             )
-            if existing:
-                existing.account_name = name
-                existing.account_type = atype
+            if existing_acct:
+                existing_acct.account_name = name
+                existing_acct.account_type = atype
                 accounts_updated += 1
             else:
                 db.add(AccountType(
-                    trust_id=trust_id,
-                    account_code=code,
-                    account_name=name,
+                    trust_id=trust_id, account_code=code, account_name=name,
                     account_type=atype,
                     is_certificate=code in {"SSC", "DSC", "BEH", "BSC"},
                 ))
@@ -428,13 +561,60 @@ async def execute_import(
             errors.append(f"Account {code}: {e}")
             continue
 
-        # ── Import transactions ──────────────────────────────────────────────
-        txns, tenants = _parse_transactions(sh, code)
-        imported = 0
+        # Build hash → [entries] lookup for this trust+account (import-originated only)
+        existing_entries = (
+            db.query(LedgerEntry)
+            .filter(
+                LedgerEntry.trust_id == trust_id,
+                LedgerEntry.account_code == code,
+                LedgerEntry.import_hash != None,  # only synced entries; manual ones stay untouched
+            )
+            .order_by(LedgerEntry.id)
+            .all()
+        )
+        hash_to_entries: dict[str, list[LedgerEntry]] = {}
+        for e in existing_entries:
+            hash_to_entries.setdefault(e.import_hash, []).append(e)
+
+        txns, tenant_names = _parse_transactions(sh, code)
+
+        # Sync transactions
+        consumed: dict[str, int] = {}  # hash -> how many from file matched
+        inserted = updated = restored = 0
 
         for txn in txns:
-            try:
-                db.add(LedgerEntry(
+            h = _make_hash(trust_id, code, txn["particulars"])
+            db_list = hash_to_entries.get(h, [])
+            idx = consumed.get(h, 0)
+
+            if idx < len(db_list):
+                # UPDATE existing entry
+                e = db_list[idx]
+                consumed[h] = idx + 1
+                changed = False
+                if e.date != txn["date"]:
+                    e.date = txn["date"]; changed = True
+                if abs((e.debit or 0) - txn["debit"]) > 0.001:
+                    e.debit = txn["debit"]; changed = True
+                if abs((e.credit or 0) - txn["credit"]) > 0.001:
+                    e.credit = txn["credit"]; changed = True
+                if e.receipt_no != txn["receipt_no"]:
+                    e.receipt_no = txn["receipt_no"]; changed = True
+                if e.party_name != txn["party_name"]:
+                    e.party_name = txn["party_name"]; changed = True
+                if e.contra_account_code != txn["contra_account_code"]:
+                    e.contra_account_code = txn["contra_account_code"]; changed = True
+                if e.particulars != txn["particulars"]:
+                    e.particulars = txn["particulars"]; changed = True
+                if e.is_deleted:
+                    e.is_deleted = False
+                    restored += 1
+                    changed = True
+                if changed:
+                    updated += 1
+            else:
+                # INSERT new entry
+                new_entry = LedgerEntry(
                     trust_id=trust_id,
                     account_code=code,
                     date=txn["date"],
@@ -446,33 +626,29 @@ async def execute_import(
                     credit=txn["credit"],
                     row_order=2,
                     account_key=str(uuid.uuid4())[:8],
-                ))
-                imported += 1
-            except Exception as e:
-                errors.append(f"Sheet {sh.name} txn {txn.get('date')}: {e}")
-
-        transactions_imported += imported
-
-        # ── Upsert tenants ───────────────────────────────────────────────────
-        if tenants:
-            plot = _plot_from_code(code)
-            for tname in tenants:
-                exists = (
-                    db.query(Tenant)
-                    .filter(Tenant.trust_id == trust_id, Tenant.name == tname)
-                    .first()
+                    import_hash=h,
+                    is_deleted=False,
                 )
-                if not exists:
-                    db.add(Tenant(
-                        trust_id=trust_id,
-                        name=tname,
-                        plot_code=plot,
-                        space_type="SHOP",
-                        monthly_rent=0.0,
-                        water_charge=0.0,
-                        is_active=True,
-                    ))
-                    tenants_upserted += 1
+                db.add(new_entry)
+                if h not in hash_to_entries:
+                    hash_to_entries[h] = []
+                hash_to_entries[h].append(new_entry)
+                consumed[h] = consumed.get(h, 0) + 1
+                inserted += 1
+
+        # Flag entries not matched by this import (present in DB but absent from file)
+        flagged = 0
+        for h, db_list in hash_to_entries.items():
+            used = consumed.get(h, 0)
+            for e in db_list[used:]:
+                if not e.is_deleted:
+                    e.is_deleted = True
+                    flagged += 1
+
+        total_inserted += inserted
+        total_updated  += updated
+        total_flagged  += flagged
+        total_restored += restored
 
         try:
             db.commit()
@@ -487,59 +663,86 @@ async def execute_import(
             "account_code": code,
             "account_name": name,
             "account_type": atype,
-            "transactions": imported,
-            "tenants":      len(tenants),
+            "inserted":     inserted,
+            "updated":      updated,
+            "flagged":      flagged,
+            "restored":     restored,
+            # legacy field kept for backward compat
+            "transactions": inserted + updated,
+            "tenants":      len(tenant_names),
         })
 
-    # ── Post-extract tenants from primary account entries with R/W contra codes ─
-    # WPF records rent/water receipts only in CASH/BANK sheets; the income account
-    # sheets (R46GK7, W2BR1 …) are structurally present but contain no transaction
-    # rows. Tenant names appear in the party_name column of those CASH entries
-    # whose contra_account_code matches an R/W pattern.
-    try:
-        all_entries_with_party = (
-            db.query(LedgerEntry)
-            .filter(
-                LedgerEntry.trust_id == trust_id,
-                LedgerEntry.party_name != None,
-                LedgerEntry.party_name != "",
-            )
-            .all()
-        )
-        seen_names: set = set()
-        for e in all_entries_with_party:
-            if not _is_rent_water(e.contra_account_code or ""):
-                continue
-            tname = (e.party_name or "").strip()
-            if not tname or tname.upper() in _SKIP_TENANT_VALUES or tname in seen_names:
-                continue
-            seen_names.add(tname)
-            exists = (
-                db.query(Tenant)
-                .filter(Tenant.trust_id == trust_id, Tenant.name == tname)
-                .first()
-            )
-            if not exists:
-                db.add(Tenant(
-                    trust_id=trust_id,
-                    name=tname,
-                    plot_code=_plot_from_code(e.contra_account_code),
-                    space_type="SHOP",
-                    monthly_rent=0.0,
-                    water_charge=0.0,
-                    is_active=True,
-                ))
-                tenants_upserted += 1
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        errors.append(f"Tenant post-extraction failed: {e}")
+    # Tenant sync
+    tenants_added, tenants_updated = _sync_tenants(trust_id, db)
+
+    # Validation pass
+    validation_warnings = _validate_entries(trust_id, db)
 
     return {
-        "accounts_created":      accounts_created,
-        "accounts_updated":      accounts_updated,
-        "transactions_imported": transactions_imported,
-        "tenants_upserted":      tenants_upserted,
-        "errors":                errors,
-        "log":                   log,
+        "transactions_inserted":  total_inserted,
+        "transactions_updated":   total_updated,
+        "transactions_flagged":   total_flagged,
+        "transactions_restored":  total_restored,
+        "accounts_created":       accounts_created,
+        "accounts_updated":       accounts_updated,
+        "tenants_added":          tenants_added,
+        "tenants_updated":        tenants_updated,
+        "validation_warnings":    validation_warnings,
+        "errors":                 errors,
+        "log":                    log,
     }
+
+
+@router.get("/warnings")
+def get_warnings(trust_id: int, db: Session = Depends(get_db)):
+    """Return all non-deleted entries with validation warnings."""
+    entries = (
+        db.query(LedgerEntry)
+        .filter(
+            LedgerEntry.trust_id == trust_id,
+            LedgerEntry.is_deleted == False,
+            LedgerEntry.validation_warnings != None,
+        )
+        .order_by(LedgerEntry.account_code, LedgerEntry.date, LedgerEntry.id)
+        .all()
+    )
+    return [
+        {
+            "id":            e.id,
+            "account_code":  e.account_code,
+            "date":          e.date.isoformat() if e.date else None,
+            "receipt_no":    e.receipt_no,
+            "party_name":    e.party_name,
+            "particulars":   e.particulars,
+            "debit":         e.debit,
+            "credit":        e.credit,
+            "warnings":      json.loads(e.validation_warnings or "[]"),
+        }
+        for e in entries
+        if e.validation_warnings and e.validation_warnings not in ("null", "[]")
+    ]
+
+
+@router.get("/flagged")
+def get_flagged(trust_id: int, db: Session = Depends(get_db)):
+    """Return entries flagged as deleted (present in DB but absent from latest import)."""
+    entries = (
+        db.query(LedgerEntry)
+        .filter(LedgerEntry.trust_id == trust_id, LedgerEntry.is_deleted == True)
+        .order_by(LedgerEntry.account_code, LedgerEntry.date, LedgerEntry.id)
+        .all()
+    )
+    return [
+        {
+            "id":                  e.id,
+            "account_code":        e.account_code,
+            "date":                e.date.isoformat() if e.date else None,
+            "receipt_no":          e.receipt_no,
+            "party_name":          e.party_name,
+            "particulars":         e.particulars,
+            "debit":               e.debit,
+            "credit":              e.credit,
+            "contra_account_code": e.contra_account_code,
+        }
+        for e in entries
+    ]

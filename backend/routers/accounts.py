@@ -163,3 +163,54 @@ def delete_journal_entry(account_key: str, trust_id: int, db: Session = Depends(
     for r in rows:
         db.delete(r)
     db.commit()
+
+
+@router.get("/transactions")
+def list_transactions(
+    trust_id: int,
+    account_code: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    limit: int = 200,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """Return one row per transaction: debit side with its contra (credit) account.
+
+    Imported entries have unique account_keys, so we use debit > 0 to pick the
+    DR leg and contra_account_code for the CR side. Manually-created journal
+    entries also follow this pattern.
+    """
+    q = db.query(LedgerEntry).filter(
+        LedgerEntry.trust_id == trust_id,
+        LedgerEntry.is_deleted == False,
+        LedgerEntry.debit > 0,
+    )
+    if account_code:
+        q = q.filter(
+            (LedgerEntry.account_code == account_code) |
+            (LedgerEntry.contra_account_code == account_code)
+        )
+    if date_from:
+        q = q.filter(LedgerEntry.date >= date_from)
+    if date_to:
+        q = q.filter(LedgerEntry.date <= date_to)
+
+    entries = q.order_by(LedgerEntry.date.desc(), LedgerEntry.id.desc()).all()
+
+    txns = [
+        {
+            "account_key": e.account_key,
+            "date": e.date.isoformat() if e.date else None,
+            "receipt_no": e.receipt_no,
+            "party_name": e.party_name,
+            "particulars": e.particulars,
+            "amount": round(e.debit, 2),
+            "debit_account": e.account_code,
+            "credit_account": e.contra_account_code or "—",
+            "row_order": e.row_order,
+        }
+        for e in entries
+    ]
+
+    return {"total": len(txns), "transactions": txns[offset : offset + limit]}

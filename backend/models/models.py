@@ -113,6 +113,10 @@ class LedgerEntry(Base):
     credit = Column(Float, default=0.0)
     row_order = Column(Integer, default=2)              # 1=opening balance, 2=regular
     account_key = Column(String)                        # shared by both legs of the dual entry
+    # Smart-sync columns (v2)
+    import_hash = Column(String, index=True)            # MD5(trust_id|account_code|particulars[:50])
+    is_deleted = Column(Boolean, default=False)         # flagged when absent from latest import
+    validation_warnings = Column(Text)                  # JSON list of warning codes
 
     trust = relationship("Trust")
 

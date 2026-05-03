@@ -440,21 +440,24 @@ export default function RentEntryPage() {
         </form>
       </div>
 
-      {/* ── Receipt History ──────────────────────────────────────────────── */}
+      {/* ── Imported Rent & Water Records ────────────────────────────────── */}
       {(() => {
-        // ── Imported records logic (grouped by tenant) ─────────────────────
         const filtered = ledgerReceipts.filter((e) => e.entry_type === ledgerTab);
-        const groupMap = {};
-        for (const e of filtered) {
-          if (!groupMap[e.party_name]) {
-            groupMap[e.party_name] = { name: e.party_name, property: e.property, entries: [], total: 0 };
-          }
-          groupMap[e.party_name].entries.push(e);
-          groupMap[e.party_name].total += e.amount;
-        }
-        const groups = Object.values(groupMap).sort((a, b) => a.name.localeCompare(b.name));
         const rentCount  = ledgerReceipts.filter((e) => e.entry_type === "rent").length;
         const waterCount = ledgerReceipts.filter((e) => e.entry_type === "water").length;
+
+        // Group by property first, then tenant within each property
+        const propMap = {};
+        for (const e of filtered) {
+          const prop = e.property || "General";
+          if (!propMap[prop]) propMap[prop] = {};
+          if (!propMap[prop][e.party_name]) {
+            propMap[prop][e.party_name] = { name: e.party_name, entries: [], total: 0 };
+          }
+          propMap[prop][e.party_name].entries.push(e);
+          propMap[prop][e.party_name].total += e.amount;
+        }
+        const properties = Object.keys(propMap).sort();
 
         return (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200">
@@ -488,72 +491,86 @@ export default function RentEntryPage() {
 
             {loadingLedger ? (
               <div className="px-6 py-8 text-center text-gray-400 text-sm animate-pulse">Loading imported records…</div>
-            ) : groups.length === 0 ? (
+            ) : filtered.length === 0 ? (
               <div className="px-6 py-10 text-center text-gray-400">
                 <Receipt className="w-10 h-10 mx-auto mb-3 opacity-30" />
                 <p className="font-medium">No imported {ledgerTab} records</p>
               </div>
             ) : (
-              <div className="divide-y divide-gray-100">
-                {groups.map((group) => {
-                  const isOpen = expandedTenants.has(group.name);
+              <div>
+                {properties.map((prop) => {
+                  const tenants = Object.values(propMap[prop]).sort((a, b) => a.name.localeCompare(b.name));
+                  const propTotal = tenants.reduce((s, t) => s + t.total, 0);
                   return (
-                    <div key={group.name}>
-                      {/* Tenant header row */}
-                      <button
-                        onClick={() => {
-                          setExpandedTenants((prev) => {
-                            const next = new Set(prev);
-                            isOpen ? next.delete(group.name) : next.add(group.name);
-                            return next;
-                          });
-                        }}
-                        className="w-full flex items-center gap-3 px-6 py-3 hover:bg-gray-50 transition-colors text-left"
-                      >
-                        {isOpen
-                          ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
-                          : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
-                        <span className="font-medium text-gray-900 flex-1 text-sm">{group.name}</span>
-                        {group.property && (
-                          <span className="text-xs font-mono bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
-                            {group.property}
-                          </span>
-                        )}
-                        <span className="text-xs text-gray-500 ml-2">
-                          {group.entries.length} receipt{group.entries.length !== 1 ? "s" : ""}
+                    <div key={prop} className="border-b border-gray-200 last:border-0">
+                      {/* Property header */}
+                      <div className="flex items-center gap-3 px-6 py-2.5 bg-gray-50 border-b border-gray-100">
+                        <span className="text-xs font-bold font-mono text-gray-700 bg-gray-200 px-2 py-0.5 rounded">
+                          {prop}
                         </span>
-                        <span className="text-sm font-semibold text-emerald-700 ml-4">
-                          {PKR(group.total)}
+                        <span className="text-xs text-gray-500">
+                          {tenants.length} tenant{tenants.length !== 1 ? "s" : ""}
                         </span>
-                      </button>
+                        <span className="ml-auto text-sm font-semibold text-gray-700">{PKR(propTotal)}</span>
+                      </div>
 
-                      {/* Expanded detail rows */}
-                      {isOpen && (
-                        <div className="overflow-x-auto bg-gray-50 border-t border-gray-100">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="bg-slate-100 border-b border-gray-200">
-                                {["Date", "Ref", "Amount", "Particulars"].map((h, i) => (
-                                  <th key={i} className={cn(
-                                    "px-4 py-2 font-medium text-gray-600 whitespace-nowrap",
-                                    i === 2 ? "text-right" : "text-left"
-                                  )}>{h}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {group.entries.map((e, idx) => (
-                                <tr key={e.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                                  <td className="px-4 py-2 whitespace-nowrap text-gray-600">{fmtDate(e.date)}</td>
-                                  <td className="px-4 py-2 font-mono text-gray-500">{e.receipt_no || "—"}</td>
-                                  <td className="px-4 py-2 text-right font-semibold text-emerald-700">{PKR(e.amount)}</td>
-                                  <td className="px-4 py-2 text-gray-600 max-w-xs truncate">{e.particulars || "—"}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
+                      {/* Tenants within this property */}
+                      {tenants.map((group) => {
+                        const isOpen = expandedTenants.has(`${prop}:${group.name}`);
+                        return (
+                          <div key={group.name}>
+                            <button
+                              onClick={() => {
+                                const key = `${prop}:${group.name}`;
+                                setExpandedTenants((prev) => {
+                                  const next = new Set(prev);
+                                  isOpen ? next.delete(key) : next.add(key);
+                                  return next;
+                                });
+                              }}
+                              className="w-full flex items-center gap-3 px-6 py-3 hover:bg-gray-50 transition-colors text-left pl-10"
+                            >
+                              {isOpen
+                                ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" />
+                                : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+                              <span className="font-medium text-gray-900 flex-1 text-sm">{group.name}</span>
+                              <span className="text-xs text-gray-500">
+                                {group.entries.length} receipt{group.entries.length !== 1 ? "s" : ""}
+                              </span>
+                              <span className="text-sm font-semibold text-emerald-700 ml-4">
+                                {PKR(group.total)}
+                              </span>
+                            </button>
+
+                            {isOpen && (
+                              <div className="overflow-x-auto bg-gray-50 border-t border-gray-100">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="bg-slate-100 border-b border-gray-200">
+                                      {["Date", "Ref", "Amount", "Particulars"].map((h, i) => (
+                                        <th key={i} className={cn(
+                                          "px-4 py-2 font-medium text-gray-600 whitespace-nowrap",
+                                          i === 2 ? "text-right" : "text-left"
+                                        )}>{h}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {group.entries.map((e, idx) => (
+                                      <tr key={e.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                                        <td className="px-4 py-2 whitespace-nowrap text-gray-600">{fmtDate(e.date)}</td>
+                                        <td className="px-4 py-2 font-mono text-gray-500">{e.receipt_no || "—"}</td>
+                                        <td className="px-4 py-2 text-right font-semibold text-emerald-700">{PKR(e.amount)}</td>
+                                        <td className="px-4 py-2 text-gray-600 max-w-xs truncate">{e.particulars || "—"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}

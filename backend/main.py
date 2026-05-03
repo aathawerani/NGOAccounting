@@ -1,11 +1,14 @@
 from contextlib import asynccontextmanager
 from datetime import date
+import hashlib
+import os
+import sqlite3
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, SessionLocal
-from models.models import Base, Trust, Plot, AccountType
+from models.models import Base, Trust, Plot, AccountType, LedgerEntry
 from routers import tenants as tenants_router
 from routers import plots as plots_router
 from routers import rent as rent_router
@@ -20,10 +23,12 @@ from routers import export_data as export_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _run_migrations()       # add new columns before create_all
     Base.metadata.create_all(bind=engine)
     _seed_trusts()
     _seed_plots()
     _seed_account_types()
+    _backfill_import_hashes()
     yield
 
 
@@ -47,6 +52,50 @@ app.include_router(receivables_router.router)
 app.include_router(accounts_router.router)
 app.include_router(import_router.router)
 app.include_router(export_router.router)
+
+
+# ── Migrations ───────────────────────────────────────────────────────────────
+
+def _run_migrations():
+    """Add new columns to existing DB without losing data."""
+    db_path = "./ngo_accounting.db"
+    if not os.path.exists(db_path):
+        return  # fresh DB — create_all handles schema
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(ledger_entries)")
+        existing = {row[1] for row in cursor.fetchall()}
+        stmts = []
+        if "import_hash" not in existing:
+            stmts.append("ALTER TABLE ledger_entries ADD COLUMN import_hash TEXT")
+        if "is_deleted" not in existing:
+            stmts.append("ALTER TABLE ledger_entries ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
+        if "validation_warnings" not in existing:
+            stmts.append("ALTER TABLE ledger_entries ADD COLUMN validation_warnings TEXT")
+        for s in stmts:
+            cursor.execute(s)
+        if stmts:
+            conn.commit()
+            print(f"DB migration: applied {len(stmts)} column addition(s) to ledger_entries")
+    finally:
+        conn.close()
+
+
+def _backfill_import_hashes():
+    """Compute import_hash for existing entries that were imported before v2."""
+    db = SessionLocal()
+    try:
+        entries = db.query(LedgerEntry).filter(LedgerEntry.import_hash == None).all()
+        if not entries:
+            return
+        for e in entries:
+            raw = f"{e.trust_id}|{e.account_code}|{(e.particulars or '')[:50]}"
+            e.import_hash = hashlib.md5(raw.encode("utf-8")).hexdigest()
+        db.commit()
+        print(f"DB backfill: computed import_hash for {len(entries)} existing entries")
+    finally:
+        db.close()
 
 
 # ── Seeding ───────────────────────────────────────────────────────────────────
