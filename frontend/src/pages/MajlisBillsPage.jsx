@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, BookOpen, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { Trash2, BookOpen, AlertCircle, ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -18,6 +18,7 @@ const TODAY = new Date().toISOString().slice(0, 10);
 
 const EMPTY = {
   date: TODAY,
+  debitAccount: "CASH",
   hijri_day: "",
   hijri_month: "",
   hijri_year: "",
@@ -89,7 +90,7 @@ function ConfirmDialog({ bill, onConfirm, onCancel }) {
           <h3 className="font-semibold text-gray-900">Delete Bill?</h3>
         </div>
         <p className="text-sm text-gray-600 mb-6">
-          Bill #{bill.serial_no} for <strong>{bill.event_name || "—"}</strong> ({fmtDate(bill.date)}) will be permanently deleted.
+          Bill #{bill.serial_no} for <strong>{bill.event_name || "—"}</strong> ({fmtDate(bill.date)}) will be permanently deleted along with its journal entries.
         </p>
         <div className="flex justify-end gap-3">
           <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
@@ -123,16 +124,28 @@ function NumInput({ value, onChange, placeholder = "0" }) {
   );
 }
 
+function StatCard({ label, value, sub }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">{label}</p>
+      <p className="text-xl font-bold text-gray-900">{value}</p>
+      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
 export default function MajlisBillsPage() {
   const { selectedTrust } = useTrust();
   const [bills, setBills] = useState([]);
   const [nextSerial, setNextSerial] = useState("001");
+  const [cashAccounts, setCashAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [showForm, setShowForm] = useState(true);
+  const [editingId, setEditingId] = useState(null);
 
   const addToast = (msg, type = "success") => {
     const id = Date.now();
@@ -164,50 +177,102 @@ export default function MajlisBillsPage() {
     } catch { /* silent */ }
   }, [selectedTrust]);
 
+  const fetchCashAccounts = useCallback(async () => {
+    if (!selectedTrust) return;
+    try {
+      const res = await fetch(`${API}/api/rent/cash-accounts?trust_id=${selectedTrust.id}`);
+      if (res.ok) setCashAccounts(await res.json());
+    } catch { /* silent */ }
+  }, [selectedTrust]);
+
   useEffect(() => {
     fetchBills();
     fetchSerial();
-  }, [fetchBills, fetchSerial]);
+    fetchCashAccounts();
+  }, [fetchBills, fetchSerial, fetchCashAccounts]);
+
+  function startEdit(b) {
+    setForm({
+      date: b.date,
+      debitAccount: cashAccounts[0]?.account_code ?? "CASH",
+      hijri_day: b.hijri_day || "",
+      hijri_month: b.hijri_month || "",
+      hijri_year: b.hijri_year || "",
+      from_time: b.from_time || "",
+      to_time: b.to_time || "",
+      event_name: b.event_name || "",
+      milk_qty: b.milk_qty || "",
+      milk_price: b.milk_price || "",
+      sugar_qty: b.sugar_qty || "",
+      sugar_price: b.sugar_price || "",
+      tea_qty: b.tea_qty || "",
+      tea_price: b.tea_price || "",
+      saffron: b.saffron || "",
+      cardamoms: b.cardamoms || "",
+      pistachios: b.pistachios || "",
+      ice: b.ice || "",
+      essence: b.essence || "",
+      miscellaneous: b.miscellaneous || "",
+      miscellaneous_desc: b.miscellaneous_desc || "",
+      lights_fans: b.lights_fans || "",
+      gas: b.gas || "",
+      loud_speaker: b.loud_speaker || "",
+      molana: b.molana || "",
+    });
+    setEditingId(b.id);
+    setShowForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function cancelEdit() {
+    setForm(EMPTY);
+    setEditingId(null);
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!selectedTrust) return;
     setSubmitting(true);
+    const payload = {
+      trust_id: selectedTrust.id,
+      date: form.date,
+      debit_account_code: form.debitAccount || "CASH",
+      hijri_day: form.hijri_day || null,
+      hijri_month: form.hijri_month || null,
+      hijri_year: form.hijri_year || null,
+      from_time: form.from_time || null,
+      to_time: form.to_time || null,
+      event_name: form.event_name || null,
+      milk_qty: n(form.milk_qty),
+      milk_price: n(form.milk_price),
+      sugar_qty: n(form.sugar_qty),
+      sugar_price: n(form.sugar_price),
+      tea_qty: n(form.tea_qty),
+      tea_price: n(form.tea_price),
+      saffron: n(form.saffron),
+      cardamoms: n(form.cardamoms),
+      pistachios: n(form.pistachios),
+      ice: n(form.ice),
+      essence: n(form.essence),
+      miscellaneous: n(form.miscellaneous),
+      miscellaneous_desc: form.miscellaneous_desc || null,
+      lights_fans: n(form.lights_fans),
+      gas: n(form.gas),
+      loud_speaker: n(form.loud_speaker),
+      molana: n(form.molana),
+    };
     try {
-      const res = await fetch(`${API}/api/majlis`, {
-        method: "POST",
+      const url = editingId ? `${API}/api/majlis/${editingId}` : `${API}/api/majlis`;
+      const method = editingId ? "PUT" : "POST";
+      const res = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trust_id: selectedTrust.id,
-          date: form.date,
-          hijri_day: form.hijri_day || null,
-          hijri_month: form.hijri_month || null,
-          hijri_year: form.hijri_year || null,
-          from_time: form.from_time || null,
-          to_time: form.to_time || null,
-          event_name: form.event_name || null,
-          milk_qty: n(form.milk_qty),
-          milk_price: n(form.milk_price),
-          sugar_qty: n(form.sugar_qty),
-          sugar_price: n(form.sugar_price),
-          tea_qty: n(form.tea_qty),
-          tea_price: n(form.tea_price),
-          saffron: n(form.saffron),
-          cardamoms: n(form.cardamoms),
-          pistachios: n(form.pistachios),
-          ice: n(form.ice),
-          essence: n(form.essence),
-          miscellaneous: n(form.miscellaneous),
-          miscellaneous_desc: form.miscellaneous_desc || null,
-          lights_fans: n(form.lights_fans),
-          gas: n(form.gas),
-          loud_speaker: n(form.loud_speaker),
-          molana: n(form.molana),
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Failed");
-      addToast("Bill recorded successfully");
+      addToast(editingId ? "Bill updated" : "Bill recorded successfully");
       setForm(EMPTY);
+      setEditingId(null);
       fetchBills();
       fetchSerial();
     } catch (err) {
@@ -225,6 +290,7 @@ export default function MajlisBillsPage() {
       setBills((p) => p.filter((b) => b.id !== deleteTarget.id));
       addToast("Bill deleted");
       fetchSerial();
+      if (editingId === deleteTarget.id) cancelEdit();
     } catch {
       addToast("Failed to delete", "error");
     } finally {
@@ -233,6 +299,13 @@ export default function MajlisBillsPage() {
   }
 
   const total = calcTotal(form);
+  const loudSpeaker = n(form.loud_speaker);
+  const billExceptLS = total - loudSpeaker;
+
+  // Stat card totals
+  const statMSub = bills.reduce((s, b) => s + ((b.total_amount || 0) - (b.loud_speaker || 0)), 0);
+  const statLChgs = bills.reduce((s, b) => s + (b.loud_speaker || 0), 0);
+  const statTotal = bills.reduce((s, b) => s + (b.total_amount || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -241,23 +314,41 @@ export default function MajlisBillsPage() {
         <ConfirmDialog bill={deleteTarget} onConfirm={handleDelete} onCancel={() => setDeleteTarget(null)} />
       )}
 
-      {/* ── Entry Form ─────────────────────────────────────────────────────── */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+      {/* ── Stat Cards ────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard label="Total Bills" value={bills.length} />
+        <StatCard label="M-SUB Received" value={PKR(statMSub)} sub="Majlis subscription" />
+        <StatCard label="L-CHGS Received" value={PKR(statLChgs)} sub="Loud speaker charges" />
+        <StatCard label="Grand Total" value={PKR(statTotal)} sub="All bills combined" />
+      </div>
+
+      {/* ── Entry / Edit Form ─────────────────────────────────────────────── */}
+      <div className={cn(
+        "bg-white rounded-xl shadow-sm border",
+        editingId ? "border-blue-300 ring-1 ring-blue-200" : "border-gray-200"
+      )}>
         <button
           type="button"
-          onClick={() => setShowForm((s) => !s)}
+          onClick={() => { if (!editingId) setShowForm((s) => !s); }}
           className="w-full flex items-center gap-3 px-6 py-4 border-b border-gray-100 text-left"
         >
-          <BookOpen className="w-5 h-5 text-emerald-600" />
-          <h2 className="text-base font-semibold text-gray-900 flex-1">New Majlis Bill</h2>
-          <span className="text-xs text-gray-400 font-mono bg-gray-100 px-2 py-1 rounded">#{nextSerial}</span>
-          {showForm ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+          <BookOpen className={cn("w-5 h-5", editingId ? "text-blue-600" : "text-emerald-600")} />
+          <h2 className="text-base font-semibold text-gray-900 flex-1">
+            {editingId ? `Edit Bill` : "New Majlis Bill"}
+          </h2>
+          {!editingId && (
+            <span className="text-xs text-gray-400 font-mono bg-gray-100 px-2 py-1 rounded">#{nextSerial}</span>
+          )}
+          {editingId ? null : showForm
+            ? <ChevronUp className="w-4 h-4 text-gray-400" />
+            : <ChevronDown className="w-4 h-4 text-gray-400" />
+          }
         </button>
 
-        {showForm && (
+        {(showForm || editingId) && (
           <form onSubmit={handleSubmit} className="p-6 space-y-5">
-            {/* Date + Hijri + Event */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Date + Event + Time + Debit Account */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <Field label="Date *">
                 <input type="date" value={form.date} onChange={set("date")} required
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
@@ -273,6 +364,17 @@ export default function MajlisBillsPage() {
                   <input type="text" value={form.to_time} onChange={set("to_time")} placeholder="To"
                     className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
+              </Field>
+              <Field label="Debit Account (DR)">
+                <select value={form.debitAccount} onChange={set("debitAccount")}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                  {cashAccounts.length === 0 && <option value="CASH">CASH</option>}
+                  {cashAccounts.map((a) => (
+                    <option key={a.account_code} value={a.account_code}>
+                      {a.account_code} — {a.account_name}
+                    </option>
+                  ))}
+                </select>
               </Field>
             </div>
 
@@ -299,7 +401,6 @@ export default function MajlisBillsPage() {
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Beverages</p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Milk */}
                 <div className="p-3 bg-gray-50 rounded-lg space-y-2">
                   <p className="text-xs font-medium text-gray-600">Milk</p>
                   <div className="flex gap-2">
@@ -314,7 +415,6 @@ export default function MajlisBillsPage() {
                   </div>
                   <p className="text-xs text-right text-emerald-700 font-medium">{PKR(n(form.milk_qty) * n(form.milk_price))}</p>
                 </div>
-                {/* Sugar */}
                 <div className="p-3 bg-gray-50 rounded-lg space-y-2">
                   <p className="text-xs font-medium text-gray-600">Sugar</p>
                   <div className="flex gap-2">
@@ -329,7 +429,6 @@ export default function MajlisBillsPage() {
                   </div>
                   <p className="text-xs text-right text-emerald-700 font-medium">{PKR(n(form.sugar_qty) * n(form.sugar_price))}</p>
                 </div>
-                {/* Tea */}
                 <div className="p-3 bg-gray-50 rounded-lg space-y-2">
                   <p className="text-xs font-medium text-gray-600">Tea</p>
                   <div className="flex gap-2">
@@ -375,19 +474,59 @@ export default function MajlisBillsPage() {
               </div>
             </div>
 
-            {/* Total + Submit */}
-            <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-              <div>
-                <span className="text-xs text-gray-500">Total Bill</span>
-                <p className="text-xl font-bold text-emerald-700">{PKR(total)}</p>
+            {/* Accounting breakdown + submit */}
+            <div className="pt-2 border-t border-gray-100 space-y-3">
+              {/* Journal preview */}
+              {total > 0 && (
+                <div className="bg-slate-50 rounded-lg p-3 text-xs space-y-1 font-mono">
+                  <p className="text-gray-500 font-sans font-medium text-xs mb-2">Journal entries that will be created:</p>
+                  <div className="flex justify-between">
+                    <span className="text-gray-700">{form.debitAccount || "CASH"} DR</span>
+                    <span className="font-semibold text-gray-900">{PKR(total)}</span>
+                  </div>
+                  {billExceptLS > 0 && (
+                    <div className="flex justify-between text-gray-500">
+                      <span className="pl-4">M-SUB CR</span>
+                      <span>{PKR(billExceptLS)}</span>
+                    </div>
+                  )}
+                  {loudSpeaker > 0 && (
+                    <div className="flex justify-between text-gray-500">
+                      <span className="pl-4">L-CHGS CR</span>
+                      <span>{PKR(loudSpeaker)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs text-gray-500">Total Bill</span>
+                  <p className="text-xl font-bold text-emerald-700">{PKR(total)}</p>
+                </div>
+                <div className="flex gap-3">
+                  {editingId && (
+                    <button
+                      type="button"
+                      onClick={cancelEdit}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 text-sm text-gray-600 hover:bg-gray-50"
+                    >
+                      <X className="w-4 h-4" />
+                      Cancel Edit
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className={cn(
+                      "px-6 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-colors",
+                      editingId ? "bg-blue-600 hover:bg-blue-700" : "bg-emerald-600 hover:bg-emerald-700"
+                    )}
+                  >
+                    {submitting ? "Saving…" : editingId ? "Update Bill" : "Record Bill"}
+                  </button>
+                </div>
               </div>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="px-6 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-              >
-                {submitting ? "Saving…" : "Record Bill"}
-              </button>
             </div>
           </form>
         )}
@@ -435,7 +574,10 @@ export default function MajlisBillsPage() {
                 </tr>
               ) : (
                 bills.map((b) => (
-                  <tr key={b.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={b.id} className={cn(
+                    "hover:bg-gray-50 transition-colors",
+                    editingId === b.id && "bg-blue-50"
+                  )}>
                     <td className="px-4 py-3 font-mono text-gray-500">{b.serial_no}</td>
                     <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{fmtDate(b.date)}</td>
                     <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
@@ -450,10 +592,22 @@ export default function MajlisBillsPage() {
                     <td className="px-4 py-3 text-right text-gray-600">{b.tea_total ? PKR(b.tea_total) : "—"}</td>
                     <td className="px-4 py-3 text-right font-semibold text-emerald-700">{PKR(b.total_amount)}</td>
                     <td className="px-4 py-3 text-right">
-                      <button onClick={() => setDeleteTarget(b)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => startEdit(b)}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                          title="Edit"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteTarget(b)}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

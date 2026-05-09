@@ -91,6 +91,23 @@ export default function TenantsPage() {
 
   useEffect(() => { fetchTenants(); fetchPlots(); }, [fetchTenants, fetchPlots]);
 
+  async function backfillRates() {
+    if (!selectedTrust) return;
+    try {
+      const res = await fetch(`${API}/tenants/backfill-rates?trust_id=${selectedTrust.id}`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed");
+      const data = await res.json();
+      if (data.updated > 0) {
+        addToast(`Updated rent rates for ${data.updated} tenant(s)`);
+        fetchTenants();
+      } else {
+        addToast("No rates found to backfill (all tenants already set or no matching ledger entries)", "info");
+      }
+    } catch {
+      addToast("Backfill failed", "error");
+    }
+  }
+
   // ── filtering ────────────────────────────────────────────────────────────
   const filtered = tenants.filter(t => {
     const q = search.toLowerCase();
@@ -227,6 +244,10 @@ export default function TenantsPage() {
             ))}
           </div>
 
+          <button onClick={backfillRates} title="Parse rent/water rates from imported ledger entries"
+            className="flex items-center gap-2 border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 text-sm font-medium px-3 py-2 rounded-lg transition-colors">
+            Fix Rates
+          </button>
           <button onClick={openAdd}
             className="ml-auto flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
             <Plus className="w-4 h-4" /> Add Tenant

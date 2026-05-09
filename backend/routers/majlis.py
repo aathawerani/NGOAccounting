@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.models import MajlisBill, Trust
+from models.models import MajlisBill, Trust, LedgerEntry
 
 router = APIRouter(prefix="/api/majlis", tags=["majlis"])
 
@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/majlis", tags=["majlis"])
 class MajlisBillBody(BaseModel):
     trust_id: int
     date: date
+    debit_account_code: str = "CASH"
     hijri_day: Optional[str] = None
     hijri_month: Optional[str] = None
     hijri_year: Optional[str] = None
@@ -91,6 +92,64 @@ def _serialize(b: MajlisBill) -> dict:
     }
 
 
+def _calc_totals(body: MajlisBillBody):
+    milk_total = body.milk_qty * body.milk_price
+    sugar_total = body.sugar_qty * body.sugar_price
+    tea_total = body.tea_qty * body.tea_price
+    total = (
+        milk_total + sugar_total + tea_total
+        + body.saffron + body.cardamoms + body.pistachios
+        + body.ice + body.essence + body.miscellaneous
+        + body.lights_fans + body.gas + body.loud_speaker + body.molana
+    )
+    return milk_total, sugar_total, tea_total, total
+
+
+def _delete_journal_entries(bill_id: int, db: Session):
+    keys = [f"majl-{bill_id}", f"lchg-{bill_id}"]
+    db.query(LedgerEntry).filter(LedgerEntry.account_key.in_(keys)).delete(synchronize_session=False)
+
+
+def _create_journal_entries(bill: MajlisBill, debit_code: str, db: Session):
+    """
+    BIB Majlis accounting:
+      CASH DR total_amount
+      M-SUB CR (total - loud_speaker)
+      L-CHGS CR loud_speaker (if > 0)
+    """
+    loud = bill.loud_speaker or 0.0
+    bill_except_ls = (bill.total_amount or 0.0) - loud
+    donor = bill.event_name or "DONOR"
+
+    if bill_except_ls > 0:
+        part = f"RECEIVED FROM {donor} FOR MAJLIS"
+        key = f"majl-{bill.id}"
+        db.add(LedgerEntry(
+            trust_id=bill.trust_id, account_code=debit_code, date=bill.date,
+            contra_account_code="M-SUB", particulars=part,
+            debit=bill_except_ls, credit=0.0, account_key=key,
+        ))
+        db.add(LedgerEntry(
+            trust_id=bill.trust_id, account_code="M-SUB", date=bill.date,
+            contra_account_code=debit_code, particulars=part,
+            debit=0.0, credit=bill_except_ls, account_key=key,
+        ))
+
+    if loud > 0:
+        part = f"RECEIVED FROM {donor} L/S CHGS"
+        key = f"lchg-{bill.id}"
+        db.add(LedgerEntry(
+            trust_id=bill.trust_id, account_code=debit_code, date=bill.date,
+            contra_account_code="L-CHGS", particulars=part,
+            debit=loud, credit=0.0, account_key=key,
+        ))
+        db.add(LedgerEntry(
+            trust_id=bill.trust_id, account_code="L-CHGS", date=bill.date,
+            contra_account_code=debit_code, particulars=part,
+            debit=0.0, credit=loud, account_key=key,
+        ))
+
+
 @router.get("")
 def list_bills(trust_id: Optional[int] = None, db: Session = Depends(get_db)):
     q = db.query(MajlisBill)
@@ -109,15 +168,7 @@ def create_bill(body: MajlisBillBody, db: Session = Depends(get_db)):
     if not db.query(Trust).filter(Trust.id == body.trust_id).first():
         raise HTTPException(status_code=404, detail="Trust not found")
 
-    milk_total = body.milk_qty * body.milk_price
-    sugar_total = body.sugar_qty * body.sugar_price
-    tea_total = body.tea_qty * body.tea_price
-    total = (
-        milk_total + sugar_total + tea_total
-        + body.saffron + body.cardamoms + body.pistachios
-        + body.ice + body.essence + body.miscellaneous
-        + body.lights_fans + body.gas + body.loud_speaker + body.molana
-    )
+    milk_total, sugar_total, tea_total, total = _calc_totals(body)
 
     bill = MajlisBill(
         trust_id=body.trust_id,
@@ -154,6 +205,55 @@ def create_bill(body: MajlisBillBody, db: Session = Depends(get_db)):
     db.add(bill)
     db.commit()
     db.refresh(bill)
+    _create_journal_entries(bill, body.debit_account_code, db)
+    db.commit()
+    return _serialize(bill)
+
+
+@router.put("/{bill_id}")
+def update_bill(bill_id: int, body: MajlisBillBody, db: Session = Depends(get_db)):
+    bill = db.query(MajlisBill).filter(MajlisBill.id == bill_id).first()
+    if not bill:
+        raise HTTPException(status_code=404, detail="Bill not found")
+
+    milk_total, sugar_total, tea_total, total = _calc_totals(body)
+
+    bill.date = body.date
+    bill.hijri_day = body.hijri_day
+    bill.hijri_month = body.hijri_month
+    bill.hijri_year = body.hijri_year
+    bill.from_time = body.from_time
+    bill.to_time = body.to_time
+    bill.event_name = body.event_name
+    bill.milk_qty = body.milk_qty
+    bill.milk_price = body.milk_price
+    bill.milk_total = milk_total
+    bill.sugar_qty = body.sugar_qty
+    bill.sugar_price = body.sugar_price
+    bill.sugar_total = sugar_total
+    bill.tea_qty = body.tea_qty
+    bill.tea_price = body.tea_price
+    bill.tea_total = tea_total
+    bill.saffron = body.saffron
+    bill.cardamoms = body.cardamoms
+    bill.pistachios = body.pistachios
+    bill.ice = body.ice
+    bill.essence = body.essence
+    bill.miscellaneous = body.miscellaneous
+    bill.miscellaneous_desc = body.miscellaneous_desc
+    bill.lights_fans = body.lights_fans
+    bill.gas = body.gas
+    bill.loud_speaker = body.loud_speaker
+    bill.molana = body.molana
+    bill.total_amount = total
+
+    db.commit()
+    db.refresh(bill)
+
+    _delete_journal_entries(bill.id, db)
+    _create_journal_entries(bill, body.debit_account_code, db)
+    db.commit()
+
     return _serialize(bill)
 
 
@@ -162,5 +262,6 @@ def delete_bill(bill_id: int, db: Session = Depends(get_db)):
     bill = db.query(MajlisBill).filter(MajlisBill.id == bill_id).first()
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
+    _delete_journal_entries(bill_id, db)
     db.delete(bill)
     db.commit()

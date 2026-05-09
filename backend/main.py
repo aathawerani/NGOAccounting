@@ -19,6 +19,7 @@ from routers import receivables as receivables_router
 from routers import accounts as accounts_router
 from routers import import_data as import_router
 from routers import export_data as export_router
+from routers import dashboard as dashboard_router
 
 
 @asynccontextmanager
@@ -52,6 +53,7 @@ app.include_router(receivables_router.router)
 app.include_router(accounts_router.router)
 app.include_router(import_router.router)
 app.include_router(export_router.router)
+app.include_router(dashboard_router.router)
 
 
 # ── Migrations ───────────────────────────────────────────────────────────────
@@ -78,6 +80,22 @@ def _run_migrations():
         if stmts:
             conn.commit()
             print(f"DB migration: applied {len(stmts)} column addition(s) to ledger_entries")
+
+        # vouchers table migrations
+        cursor.execute("PRAGMA table_info(vouchers)")
+        v_existing = {row[1] for row in cursor.fetchall()}
+        v_stmts = []
+        if "voucher_type" not in v_existing:
+            v_stmts.append("ALTER TABLE vouchers ADD COLUMN voucher_type TEXT DEFAULT 'Payment'")
+        if "account_code" not in v_existing:
+            v_stmts.append("ALTER TABLE vouchers ADD COLUMN account_code TEXT")
+        if "contra_account_code" not in v_existing:
+            v_stmts.append("ALTER TABLE vouchers ADD COLUMN contra_account_code TEXT DEFAULT 'CASH'")
+        for s in v_stmts:
+            cursor.execute(s)
+        if v_stmts:
+            conn.commit()
+            print(f"DB migration: applied {len(v_stmts)} column addition(s) to vouchers")
     finally:
         conn.close()
 

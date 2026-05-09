@@ -1,7 +1,8 @@
-import { Calendar, ChevronDown } from "lucide-react";
+import { Calendar, ChevronDown, Menu } from "lucide-react";
 import { useTrust } from "../context/TrustContext";
 
 const PAGE_TITLES = {
+  dashboard: "Dashboard",
   "rent-entry": "Rent Entry",
   tenants: "Tenants",
   "majlis-bills": "Majlis Bills",
@@ -14,7 +15,7 @@ const PAGE_TITLES = {
   "export-reports": "Export Reports",
 };
 
-export default function TopBar({ activePage }) {
+export default function TopBar({ activePage, onMenuToggle }) {
   const { trusts, selectedTrust, setSelectedTrust, currentDate } = useTrust();
 
   function handleTrustChange(e) {
@@ -23,11 +24,20 @@ export default function TopBar({ activePage }) {
   }
 
   return (
-    <header className="h-16 bg-white border-b border-gray-100 flex items-center justify-between px-6 flex-shrink-0 shadow-sm">
-      {/* Page title */}
-      <h1 className="text-base font-semibold text-gray-800">
-        {PAGE_TITLES[activePage] ?? "Dashboard"}
-      </h1>
+    <header className="h-16 bg-white border-b border-gray-100 flex items-center justify-between px-4 md:px-6 flex-shrink-0 shadow-sm">
+      {/* Hamburger + page title */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onMenuToggle}
+          className="md:hidden p-2 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors"
+          aria-label="Toggle sidebar"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <h1 className="text-base font-semibold text-gray-800">
+          {PAGE_TITLES[activePage] ?? "Dashboard"}
+        </h1>
+      </div>
 
       {/* Right controls */}
       <div className="flex items-center gap-5">

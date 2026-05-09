@@ -1,14 +1,19 @@
 import calendar
 from datetime import date
+from io import BytesIO
 from typing import Optional
 
+from docx import Document
+from docx.shared import Pt, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from models.models import LedgerEntry, RentReceipt, Tenant, Trust
+from models.models import AccountType, LedgerEntry, RentReceipt, Tenant, Trust
 
 router = APIRouter(prefix="/api/rent", tags=["rent"])
 
@@ -25,6 +30,7 @@ class RentReceiptBody(BaseModel):
     to_year: int
     rent_arrears: float = 0.0
     water_arrears: float = 0.0
+    debit_account_code: str = "CASH"   # which cash/bank account to debit
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -85,6 +91,107 @@ def _serialize(r: RentReceipt) -> dict:
     }
 
 
+def _rent_water_accounts(trust_code: str, plot_code: Optional[str]) -> tuple[str, str]:
+    """Return (rent_account_code, water_account_code) for a trust + plot."""
+    tc = (trust_code or "").upper()
+    if tc == "HVHT":
+        return "RGK6", "WGK6"
+    if tc == "BIB":
+        return "RENT", "WSC"
+    # HTTT (and fallback): R{plot} / W{plot}
+    if plot_code:
+        return f"R{plot_code}", f"W{plot_code}"
+    return "RENT", "WSC"   # safe fallback
+
+
+def _create_journal_entries(
+    receipt: RentReceipt,
+    trust_code: str,
+    debit_code: str,
+    db: Session,
+) -> None:
+    """Create double-entry LedgerEntry rows for rent and/or water amounts."""
+    rent_code, water_code = _rent_water_accounts(trust_code, receipt.plot_code)
+
+    rent_total  = (receipt.total_rent  or 0.0) + (receipt.rent_arrears  or 0.0)
+    water_total = (receipt.total_water or 0.0) + (receipt.water_arrears or 0.0)
+
+    entries_to_add = []
+
+    if rent_total > 0:
+        key = f"rent-{receipt.id}"
+        entries_to_add += [
+            LedgerEntry(
+                trust_id=receipt.trust_id,
+                account_code=debit_code,
+                date=receipt.date,
+                receipt_no=receipt.serial_no,
+                party_name=receipt.tenant_name,
+                contra_account_code=rent_code,
+                particulars=receipt.rent_particulars,
+                debit=rent_total,
+                credit=0.0,
+                row_order=2,
+                account_key=key,
+            ),
+            LedgerEntry(
+                trust_id=receipt.trust_id,
+                account_code=rent_code,
+                date=receipt.date,
+                receipt_no=receipt.serial_no,
+                party_name=receipt.tenant_name,
+                contra_account_code=debit_code,
+                particulars=receipt.rent_particulars,
+                debit=0.0,
+                credit=rent_total,
+                row_order=2,
+                account_key=key,
+            ),
+        ]
+
+    if water_total > 0:
+        key = f"watc-{receipt.id}"
+        entries_to_add += [
+            LedgerEntry(
+                trust_id=receipt.trust_id,
+                account_code=debit_code,
+                date=receipt.date,
+                receipt_no=receipt.serial_no,
+                party_name=receipt.tenant_name,
+                contra_account_code=water_code,
+                particulars=receipt.water_particulars,
+                debit=water_total,
+                credit=0.0,
+                row_order=2,
+                account_key=key,
+            ),
+            LedgerEntry(
+                trust_id=receipt.trust_id,
+                account_code=water_code,
+                date=receipt.date,
+                receipt_no=receipt.serial_no,
+                party_name=receipt.tenant_name,
+                contra_account_code=debit_code,
+                particulars=receipt.water_particulars,
+                debit=0.0,
+                credit=water_total,
+                row_order=2,
+                account_key=key,
+            ),
+        ]
+
+    if entries_to_add:
+        db.add_all(entries_to_add)
+        db.commit()
+
+
+def _delete_journal_entries(receipt_id: int, db: Session) -> None:
+    """Delete all LedgerEntry rows created for a specific receipt."""
+    keys = [f"rent-{receipt_id}", f"watc-{receipt_id}"]
+    db.query(LedgerEntry).filter(LedgerEntry.account_key.in_(keys)).delete(synchronize_session=False)
+    db.commit()
+
+
 def _recalc_last_paid(tenant_id: int, db: Session):
     """After a delete, update tenant.last_paid to the latest remaining receipt."""
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
@@ -106,6 +213,28 @@ def _recalc_last_paid(tenant_id: int, db: Session):
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@router.get("/cash-accounts")
+def list_cash_accounts(trust_id: int, db: Session = Depends(get_db)):
+    """Return ASSET account types that are cash or bank accounts for a given trust."""
+    accts = (
+        db.query(AccountType)
+        .filter(
+            AccountType.trust_id == trust_id,
+            AccountType.account_type == "ASSET",
+        )
+        .order_by(AccountType.account_code)
+        .all()
+    )
+    cash_like = [
+        {"account_code": a.account_code, "account_name": a.account_name}
+        for a in accts
+        if a.account_code == "CASH"
+        or a.account_code == "BOX"
+        or a.account_code.upper().startswith("BANK")
+    ]
+    return cash_like
+
 
 @router.get("")
 def list_receipts(trust_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -187,6 +316,11 @@ def create_receipt(body: RentReceiptBody, db: Session = Depends(get_db)):
     tenant.last_paid_year = body.to_year
 
     db.commit()
+    db.refresh(receipt)
+
+    # Create double-entry ledger entries (CASH/BANK DR, rent/water CR)
+    _create_journal_entries(receipt, trust.code, body.debit_account_code, db)
+
     return _serialize(receipt)
 
 
@@ -236,10 +370,16 @@ def update_receipt(receipt_id: int, body: RentReceiptBody, db: Session = Depends
     receipt.arrears_particulars = f"{space}, RENT AREARS"
     receipt.water_arrears_particulars = f"{space}, WATER AREARS"
 
-    # Recalculate tenant last paid from all remaining receipts
     db.commit()
     _recalc_last_paid(body.tenant_id, db)
     db.refresh(receipt)
+
+    # Refresh journal entries (delete old, create new)
+    _delete_journal_entries(receipt_id, db)
+    trust = db.query(Trust).filter(Trust.id == body.trust_id).first()
+    if trust:
+        _create_journal_entries(receipt, trust.code, body.debit_account_code, db)
+
     return _serialize(receipt)
 
 
@@ -254,6 +394,7 @@ def ledger_receipts(trust_id: int, db: Session = Depends(get_db)):
         db.query(LedgerEntry)
         .filter(
             LedgerEntry.trust_id == trust_id,
+            LedgerEntry.is_deleted == False,
             LedgerEntry.party_name != None,
             LedgerEntry.party_name != "",
             or_(
@@ -290,7 +431,108 @@ def delete_receipt(receipt_id: int, db: Session = Depends(get_db)):
     if not receipt:
         raise HTTPException(status_code=404, detail="Receipt not found")
     tenant_id = receipt.tenant_id
+    _delete_journal_entries(receipt_id, db)
     db.delete(receipt)
     db.commit()
     if tenant_id:
         _recalc_last_paid(tenant_id, db)
+
+
+@router.get("/receipt/{receipt_id}/print")
+def print_receipt(receipt_id: int, db: Session = Depends(get_db)):
+    """Return a .docx rent receipt for download/print."""
+    r = (
+        db.query(RentReceipt)
+        .options(joinedload(RentReceipt.trust))
+        .filter(RentReceipt.id == receipt_id)
+        .first()
+    )
+    if not r:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
+    trust_name = r.trust.name if r.trust else "Trust"
+    trust_code = r.trust.code if r.trust else ""
+
+    doc = Document()
+
+    # Page margins
+    for section in doc.sections:
+        section.top_margin = Cm(1.5)
+        section.bottom_margin = Cm(1.5)
+        section.left_margin = Cm(2.0)
+        section.right_margin = Cm(2.0)
+
+    def _para(text, bold=False, size=11, align=WD_ALIGN_PARAGRAPH.LEFT, space_after=0):
+        p = doc.add_paragraph()
+        p.alignment = align
+        p.paragraph_format.space_after = Pt(space_after)
+        run = p.add_run(text)
+        run.bold = bold
+        run.font.size = Pt(size)
+        return p
+
+    def _row(label, value):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(0)
+        r1 = p.add_run(f"{label:<30}")
+        r1.font.size = Pt(10)
+        r2 = p.add_run(value)
+        r2.bold = True
+        r2.font.size = Pt(10)
+
+    # Header
+    _para(trust_name, bold=True, size=14, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=2)
+    _para("RENT RECEIPT", bold=True, size=12, align=WD_ALIGN_PARAGRAPH.CENTER, space_after=6)
+    doc.add_paragraph()
+
+    # Receipt meta
+    receipt_date = r.date.strftime("%-d %B %Y") if r.date else "—"
+    _row("Receipt No.", f"  {r.serial_no or '—'}")
+    _row("Date.", f"  {receipt_date}")
+    doc.add_paragraph()
+
+    # Tenant details
+    _row("Received from.", f"  {r.tenant_name or '—'}")
+    _row("CNIC.", f"  {r.cnic or '—'}")
+    _row("Property.", f"  {r.space_type or ''} {r.space_number or ''}, {r.plot_code or ''}")
+    doc.add_paragraph()
+
+    # Amounts
+    PKR = lambda n: f"PKR {int(n or 0):,}"
+
+    if r.rent_particulars:
+        _row("Rent.", f"  {r.rent_particulars}    {PKR(r.total_rent)}")
+    if r.water_particulars and r.total_water:
+        _row("Water Charges.", f"  {r.water_particulars}    {PKR(r.total_water)}")
+    if r.rent_arrears:
+        _row("Rent Arrears.", f"  {r.arrears_particulars or ''}    {PKR(r.rent_arrears)}")
+    if r.water_arrears:
+        _row("Water Arrears.", f"  {r.water_arrears_particulars or ''}    {PKR(r.water_arrears)}")
+
+    doc.add_paragraph()
+    _row("TOTAL AMOUNT.", f"  {PKR(r.total_amount)}")
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    # Signature lines
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.paragraph_format.space_after = Pt(24)
+    r1 = p.add_run(f"For {trust_code or trust_name}")
+    r1.font.size = Pt(10)
+
+    p2 = doc.add_paragraph()
+    p2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    r2 = p2.add_run("Authorised Signatory")
+    r2.font.size = Pt(9)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+
+    filename = f"receipt_{r.serial_no or receipt_id}_{trust_code}.docx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

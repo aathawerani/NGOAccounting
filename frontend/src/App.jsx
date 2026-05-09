@@ -2,6 +2,7 @@ import { useState } from "react";
 import { TrustProvider } from "./context/TrustContext";
 import Layout from "./components/Layout";
 import PlaceholderPage from "./pages/PlaceholderPage";
+import DashboardPage from "./pages/DashboardPage";
 import TenantsPage from "./pages/TenantsPage";
 import RentEntryPage from "./pages/RentEntryPage";
 import MajlisBillsPage from "./pages/MajlisBillsPage";
@@ -14,6 +15,7 @@ import ImportExcelPage from "./pages/ImportExcelPage";
 import ExportReportsPage from "./pages/ExportReportsPage";
 
 const PAGE_LABELS = {
+  dashboard: "Dashboard",
   "rent-entry": "Rent Entry",
   tenants: "Tenants",
   "majlis-bills": "Majlis Bills",
@@ -26,8 +28,10 @@ const PAGE_LABELS = {
   "export-reports": "Export Reports",
 };
 
-function PageRouter({ activePage }) {
+function PageRouter({ activePage, onNavigate }) {
   switch (activePage) {
+    case "dashboard":
+      return <DashboardPage onNavigate={onNavigate} />;
     case "tenants":
       return <TenantsPage />;
     case "rent-entry":
@@ -54,12 +58,12 @@ function PageRouter({ activePage }) {
 }
 
 function App() {
-  const [activePage, setActivePage] = useState("rent-entry");
+  const [activePage, setActivePage] = useState("dashboard");
 
   return (
     <TrustProvider>
       <Layout activePage={activePage} onNavigate={setActivePage}>
-        <PageRouter activePage={activePage} />
+        <PageRouter activePage={activePage} onNavigate={setActivePage} />
       </Layout>
     </TrustProvider>
   );

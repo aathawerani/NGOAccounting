@@ -84,6 +84,7 @@ def get_ledger(
     q = db.query(LedgerEntry).filter(
         LedgerEntry.trust_id == trust_id,
         LedgerEntry.account_code == account_code,
+        LedgerEntry.is_deleted == False,
     )
     if date_from:
         q = q.filter(LedgerEntry.date >= date_from)

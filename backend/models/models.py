@@ -194,8 +194,11 @@ class Voucher(Base):
     trust_id = Column(Integer, ForeignKey("trusts.id"), nullable=False)
     date = Column(Date, nullable=False)
     voucher_number = Column(String)
-    account_name = Column(String)   # expense account name
-    being = Column(Text)            # particulars / description
+    voucher_type = Column(String, default="Payment")     # "Payment" | "Receipt"
+    account_code = Column(String)                         # DR acct (Payment) or CR acct (Receipt)
+    account_name = Column(String)                         # display name (denormalised)
+    contra_account_code = Column(String, default="CASH")  # CR acct (Payment) or DR acct (Receipt)
+    being = Column(Text)                                  # particulars / description
     amount = Column(Float, default=0.0)
 
     trust = relationship("Trust")

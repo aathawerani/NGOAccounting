@@ -8,10 +8,19 @@ import {
   BarChart2,
   ArrowUpDown,
   Receipt,
+  LayoutDashboard,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const NAV_SECTIONS = [
+  {
+    id: "overview",
+    label: "Overview",
+    icon: LayoutDashboard,
+    children: [
+      { id: "dashboard", label: "Dashboard" },
+    ],
+  },
   {
     id: "rent",
     label: "Rent",
@@ -60,7 +69,7 @@ const NAV_SECTIONS = [
 ];
 
 export default function Sidebar({ activePage, onNavigate }) {
-  const [expanded, setExpanded] = useState(["rent"]);
+  const [expanded, setExpanded] = useState(["overview", "rent"]);
 
   function toggle(sectionId) {
     setExpanded((prev) =>
@@ -71,7 +80,7 @@ export default function Sidebar({ activePage, onNavigate }) {
   }
 
   return (
-    <aside className="w-64 min-h-screen bg-slate-900 flex flex-col flex-shrink-0">
+    <aside className="w-64 h-full min-h-screen bg-slate-900 flex flex-col flex-shrink-0">
       {/* Brand */}
       <div className="px-5 py-5 border-b border-slate-700/60">
         <div className="flex items-center gap-3">

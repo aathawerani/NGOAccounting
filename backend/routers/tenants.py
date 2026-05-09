@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -5,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from models.models import Tenant, Trust
+from models.models import LedgerEntry, Tenant, Trust
 
 router = APIRouter(prefix="/api/tenants", tags=["tenants"])
 
@@ -93,3 +94,59 @@ def delete_tenant(tenant_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Tenant not found")
     db.delete(tenant)
     db.commit()
+
+
+@router.post("/backfill-rates")
+def backfill_rates(trust_id: int, db: Session = Depends(get_db)):
+    """Parse RENT @N and WATER @N from ledger particulars to populate tenant rates (only fills 0-rate fields)."""
+    tenants = db.query(Tenant).filter(Tenant.trust_id == trust_id).all()
+    if not tenants:
+        return {"updated": 0, "results": []}
+
+    entries = db.query(LedgerEntry).filter(
+        LedgerEntry.trust_id == trust_id,
+        LedgerEntry.is_deleted == False,
+    ).all()
+
+    rent_re = re.compile(r'RENT\s+@\s*(\d+)', re.IGNORECASE)
+    water_re = re.compile(r'WATER\s+@\s*(\d+)', re.IGNORECASE)
+
+    party_rates: dict[str, dict] = {}
+    for e in entries:
+        if not e.party_name or not e.particulars:
+            continue
+        key = e.party_name.strip().upper()
+        rm = rent_re.search(e.particulars)
+        if rm:
+            r = int(rm.group(1))
+            party_rates.setdefault(key, {})
+            party_rates[key]["rent"] = max(party_rates[key].get("rent", 0), r)
+        wm = water_re.search(e.particulars)
+        if wm:
+            r = int(wm.group(1))
+            party_rates.setdefault(key, {})
+            party_rates[key]["water"] = max(party_rates[key].get("water", 0), r)
+
+    updated = 0
+    results = []
+    for tenant in tenants:
+        key = tenant.name.strip().upper()
+        rates = party_rates.get(key, {})
+        changed = False
+        if rates.get("rent", 0) > 0 and (tenant.monthly_rent or 0) == 0:
+            tenant.monthly_rent = float(rates["rent"])
+            changed = True
+        if rates.get("water", 0) > 0 and (tenant.water_charge or 0) == 0:
+            tenant.water_charge = float(rates["water"])
+            changed = True
+        if changed:
+            updated += 1
+            results.append({
+                "name": tenant.name,
+                "monthly_rent": tenant.monthly_rent,
+                "water_charge": tenant.water_charge,
+            })
+
+    if updated:
+        db.commit()
+    return {"updated": updated, "results": results}

@@ -246,7 +246,7 @@ def _build_balance_sheet(ws, trust, accounts, entries, date_from, date_to):
 
     asset_accts  = [a for a in accounts if a.account_type == "ASSET"]
     liab_accts   = [a for a in accounts if a.account_type == "LIABILITY"]
-    equity_accts = [a for a in accounts if a.account_type == "EQUITY"]
+    equity_accts = [a for a in accounts if a.account_type in ("EQUITY", "CAPITAL")]
     # Net profit from IS goes into equity
     income_accts   = [a for a in accounts if a.account_type == "INCOME"]
     expense_accts  = [a for a in accounts if a.account_type == "EXPENSE"]

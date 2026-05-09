@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, Receipt, AlertCircle, Pencil, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Trash2, Receipt, AlertCircle, Pencil, X, ChevronDown, ChevronRight, Printer } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -45,6 +45,7 @@ function emptyForm() {
     toYear: THIS_YEAR,
     rentArrears: "",
     waterArrears: "",
+    debitAccount: "CASH",
   };
 }
 
@@ -102,6 +103,7 @@ export default function RentEntryPage() {
 
   const [tenants, setTenants] = useState([]);
   const [receipts, setReceipts] = useState([]);
+  const [cashAccounts, setCashAccounts] = useState([]);
   const [nextSerial, setNextSerial] = useState("001");
   const [loadingTenants, setLoadingTenants] = useState(false);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
@@ -179,6 +181,14 @@ export default function RentEntryPage() {
     }
   }, [selectedTrust]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const fetchCashAccounts = useCallback(async () => {
+    if (!selectedTrust) return;
+    try {
+      const res = await fetch(`${API}/api/rent/cash-accounts?trust_id=${selectedTrust.id}`);
+      if (res.ok) setCashAccounts(await res.json());
+    } catch { /* silent */ }
+  }, [selectedTrust]);
+
   useEffect(() => {
     setForm(emptyForm());
     setEditTarget(null);
@@ -187,7 +197,8 @@ export default function RentEntryPage() {
     fetchReceipts();
     fetchNextSerial();
     fetchLedgerReceipts();
-  }, [fetchTenants, fetchReceipts, fetchNextSerial, fetchLedgerReceipts]);
+    fetchCashAccounts();
+  }, [fetchTenants, fetchReceipts, fetchNextSerial, fetchLedgerReceipts, fetchCashAccounts]);
 
   // ── Calculations ─────────────────────────────────────────────────────────────
   const n = form.tenantId
@@ -241,6 +252,7 @@ export default function RentEntryPage() {
       to_year: form.toYear,
       rent_arrears: arrR,
       water_arrears: arrW,
+      debit_account_code: form.debitAccount || "CASH",
     };
 
     try {
@@ -314,9 +326,9 @@ export default function RentEntryPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          {/* Row 1: Tenant + Date */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
+          {/* Row 1: Tenant + Date + Cash Account */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="md:col-span-1">
               <label className="block text-xs font-medium text-gray-700 mb-1">Tenant *</label>
               <select
                 value={form.tenantId}
@@ -340,6 +352,21 @@ export default function RentEntryPage() {
                 required
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Debit Account (DR)</label>
+              <select
+                value={form.debitAccount}
+                onChange={(e) => setForm((f) => ({ ...f, debitAccount: e.target.value }))}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                {cashAccounts.length === 0 && <option value="CASH">CASH</option>}
+                {cashAccounts.map((a) => (
+                  <option key={a.account_code} value={a.account_code}>
+                    {a.account_code} — {a.account_name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -625,6 +652,10 @@ export default function RentEntryPage() {
                     <td className="px-4 py-3 text-right font-semibold text-emerald-700">{PKR(r.total_amount)}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <a href={`${API}/api/rent/receipt/${r.id}/print`} download
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Download receipt (.docx)">
+                          <Printer className="w-4 h-4" />
+                        </a>
                         <button onClick={() => startEdit(r)}
                           className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit">
                           <Pencil className="w-4 h-4" />
