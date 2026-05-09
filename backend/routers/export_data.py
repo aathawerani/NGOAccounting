@@ -13,7 +13,7 @@ from openpyxl.styles import (
 from openpyxl.utils import get_column_letter
 
 from database import get_db
-from models.models import AccountType, LedgerEntry, Trust
+from models.models import AccountType, LedgerEntry, Trust, Receivable
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -842,6 +842,78 @@ def export_full(
     yr_label  = str(year) if year else "all"
     mode_sfx  = "" if mode == "full" else f"-{mode}"
     filename  = f"{trust.code}-{yr_label}{mode_sfx}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/receivables")
+def export_receivables(
+    trust_id: Optional[int] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Export pending (or all) receivables for one or all trusts as .xlsx."""
+    trusts = db.query(Trust).order_by(Trust.code).all()
+    trust_map = {t.id: t for t in trusts}
+
+    q = db.query(Receivable)
+    if trust_id is not None:
+        q = q.filter(Receivable.trust_id == trust_id)
+    if status:
+        q = q.filter(Receivable.status == status)
+    rows = q.order_by(Receivable.trust_id, Receivable.date).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Receivables"
+
+    headers = ["Trust", "Date", "Receipt No", "Party Name", "Particulars", "Amount (PKR)", "Status"]
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=col, value=h)
+        _style(c, fill=_BLUE_FILL, font=_BOLD_WHITE, align=_CENTER)
+
+    for i, r in enumerate(rows, start=2):
+        trust_code = trust_map.get(r.trust_id, type("T", (), {"code": str(r.trust_id)})()).code
+        fill = _ALT_FILL if i % 2 == 0 else _WHITE_FILL
+        values = [
+            trust_code,
+            r.date.isoformat() if r.date else "",
+            r.receipt_no or "",
+            r.party_name or "",
+            r.particulars or "",
+            r.amount,
+            r.status,
+        ]
+        for col, val in enumerate(values, 1):
+            c = ws.cell(row=i, column=col, value=val)
+            _style(c, fill=fill, font=_NORMAL,
+                   align=_RIGHT if col == 6 else _LEFT,
+                   num_format=_PKR_FMT if col == 6 else None)
+
+    # Totals row
+    total_row = len(rows) + 2
+    for col in range(1, 8):
+        c = ws.cell(row=total_row, column=col)
+        if col == 5:
+            c.value = "TOTAL"
+        elif col == 6:
+            c.value = sum(r.amount for r in rows)
+        _style(c, fill=_DARK_FILL, font=_BOLD_WHITE,
+               align=_RIGHT if col >= 5 else _LEFT,
+               num_format=_PKR_FMT if col == 6 else None)
+
+    _auto_width(ws)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    trust_label = trust_map[trust_id].code if trust_id and trust_id in trust_map else "all"
+    status_label = f"-{status}" if status else ""
+    filename = f"receivables-{trust_label}{status_label}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

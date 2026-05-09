@@ -13,6 +13,7 @@ const PAGE_TITLES = {
   receivables: "Receivables",
   "import-excel": "Import Excel",
   "export-reports": "Export Reports",
+  "financial-reports": "Financial Reports",
 };
 
 export default function TopBar({ activePage, onMenuToggle }) {

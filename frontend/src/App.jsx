@@ -13,6 +13,7 @@ import JournalEntriesPage from "./pages/JournalEntriesPage";
 import CashPositionPage from "./pages/CashPositionPage";
 import ImportExcelPage from "./pages/ImportExcelPage";
 import ExportReportsPage from "./pages/ExportReportsPage";
+import ReportsPage from "./pages/ReportsPage";
 
 const PAGE_LABELS = {
   dashboard: "Dashboard",
@@ -26,6 +27,7 @@ const PAGE_LABELS = {
   receivables: "Receivables",
   "import-excel": "Import Excel",
   "export-reports": "Export Reports",
+  "financial-reports": "Financial Reports",
 };
 
 function PageRouter({ activePage, onNavigate }) {
@@ -52,6 +54,8 @@ function PageRouter({ activePage, onNavigate }) {
       return <ImportExcelPage />;
     case "export-reports":
       return <ExportReportsPage />;
+    case "financial-reports":
+      return <ReportsPage />;
     default:
       return <PlaceholderPage title={PAGE_LABELS[activePage] ?? "Dashboard"} />;
   }

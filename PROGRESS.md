@@ -83,7 +83,8 @@
 | WPF full workbook (exact round-trip) | ✅ Done | `/api/export/full` |
 | Fiscal year filter | ✅ Done | |
 | Date range presets | ✅ Done | |
-| Re-import verification (round-trip test) | ⬜ Pending | |
+| Re-import verification (round-trip test) | ✅ Done | 413 txns / 0 inserts / 0 flags — lossless |
+| Export Receivables to Excel | ✅ Done | `/api/export/receivables?trust_id=X&status=Pending` |
 
 ### Tenants (TenantsPage)
 | Feature | Status | Notes |
@@ -132,6 +133,16 @@
 | Filter by space type / plot | ✅ Done | SHOP/FLAT dropdown + plot dropdown |
 | General Receivables tab | ✅ Done | Add form + table, mark received, delete |
 | Stat cards | ✅ Done | Overdue tenants, est. outstanding, pending receivables |
+| Export to Excel button | ✅ Done | Downloads pending receivables via `/api/export/receivables` |
+
+### Financial Reports (ReportsPage) — NEW
+| Feature | Status | Notes |
+|---|---|---|
+| Trial Balance tab | ✅ Done | All accounts, DR/CR/balance, CSV download |
+| Income Statement tab | ✅ Done | INCOME vs EXPENSE, net surplus/deficit |
+| Balance Sheet tab | ✅ Done | Two-column ASSETS vs LIAB+EQUITY, net profit row, balance check alert |
+| Fiscal year filter | ✅ Done | Year dropdown (2020–current) or "All Periods" |
+| Backend endpoints | ✅ Done | `/api/reports/trial-balance`, `/api/reports/income-statement`, `/api/reports/balance-sheet` |
 
 ---
 
@@ -143,9 +154,9 @@
 
 3. **HVHT and BIB have no ledger data**: Only HTTT has been imported. Other trusts show empty pages.
 
-4. **GF classified as CAPITAL not EQUITY**: Imported from HTTT WPF file. Seeded as EQUITY but import overwrites to CAPITAL. Balance Sheet equity section may miss it.
+4. ~~**GF classified as CAPITAL not EQUITY**~~ **FIXED** — `export_data.py` `_build_balance_sheet` and `/api/reports/balance-sheet` now include both `EQUITY` and `CAPITAL` account types in equity section.
 
-5. **Tenant rent/water amounts are 0 after import**: Tenants extracted from WPF import don't have monthly_rent / water_charge populated (they come from party_name, not from a rate table). Users must manually set rent rates on the Tenants page before creating receipts that generate ledger entries.
+5. ~~**Tenant rent/water amounts are 0 after import**~~ **FIXED** — `POST /api/tenants/backfill-rates` mines `RENT @N` / `WATER @N` patterns from ledger; "Fix Rates" button on TenantsPage calls it.
 
 ---
 
@@ -250,3 +261,27 @@
 **TASK-009: Print Rent Receipt**
 - `routers/rent.py`: Added `GET /api/rent/receipt/{id}/print` — generates `.docx` via python-docx with receipt header, tenant details, rent/water/arrears lines, total, signature block; returns as file download
 - `RentEntryPage.jsx`: Added printer icon button (blue hover) in each receipt row that does `<a href=... download>` to trigger the download
+
+---
+
+### Session 2026-05-09 (third continuation) — TASK-010–014 + Trust Detection Fix
+
+**Trust detection fix (`import_data.py`):**
+- Moved HVHT before HTTT in `_TRUST_KEYWORDS` and moved `THAWER` from HTTT to HVHT set (it's the HVHT founder's name, not HTTT)
+- Added HUSAMI, TAHERI, TAHIR to HTTT keywords
+- `HVHT2023.xlsx` → correctly detected as HVHT; `BIB2022.xls` → correctly detected as BIB
+
+**TASK-010–012: Financial Reports Page**
+- `routers/reports.py` (NEW): Three JSON endpoints — `/api/reports/trial-balance`, `/api/reports/income-statement`, `/api/reports/balance-sheet`; all support `?year=N` or `?date_from`/`?date_to` filters
+- `main.py`: Registered reports router
+- `ReportsPage.jsx` (NEW): Three-tab page — Trial Balance (with CSV download), Income Statement (surplus/deficit row), Balance Sheet (two-column ASSETS vs LIAB+EQUITY with balance-check alert)
+- `Sidebar.jsx`: Added "Financial Reports" link under Reports section
+- `App.jsx` + `TopBar.jsx`: Wired route and title
+
+**TASK-013: Export Receivables to Excel**
+- `routers/export_data.py`: Added `GET /api/export/receivables?trust_id=X&status=Pending` — exports pending receivables as styled xlsx
+- `ReceivablesPage.jsx`: Added "Export" download button in General Receivables table header
+
+**TASK-014: Round-Trip Re-import Test**
+- Verified HTTT export → re-import: 413 transactions, 0 would-insert, 0 would-flag — lossless
+- Note: DEP account sheet is skipped by `_SKIP` list (added per urgent fix); its 0 entries still round-trip correctly (no entries are in DEP in the original data)

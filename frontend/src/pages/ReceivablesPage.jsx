@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, Inbox, CheckCircle, AlertCircle, Users, ClipboardList } from "lucide-react";
+import { Trash2, Inbox, CheckCircle, AlertCircle, Users, ClipboardList, Download } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -434,11 +434,20 @@ export default function ReceivablesPage() {
                 Receivables
                 {!loading && <span className="ml-2 text-xs font-normal text-gray-400">({receivables.length})</span>}
               </h2>
-              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                <input type="checkbox" checked={showReceived} onChange={(e) => setShowReceived(e.target.checked)}
-                  className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
-                Show received
-              </label>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                  <input type="checkbox" checked={showReceived} onChange={(e) => setShowReceived(e.target.checked)}
+                    className="rounded border-gray-300 text-emerald-600 focus:ring-emerald-500" />
+                  Show received
+                </label>
+                <a
+                  href={`${API}/api/export/receivables?trust_id=${selectedTrust?.id}&status=Pending`}
+                  download
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" /> Export
+                </a>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

@@ -20,6 +20,7 @@ from routers import accounts as accounts_router
 from routers import import_data as import_router
 from routers import export_data as export_router
 from routers import dashboard as dashboard_router
+from routers import reports as reports_router
 
 
 @asynccontextmanager
@@ -54,6 +55,7 @@ app.include_router(accounts_router.router)
 app.include_router(import_router.router)
 app.include_router(export_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(reports_router.router)
 
 
 # ── Migrations ───────────────────────────────────────────────────────────────

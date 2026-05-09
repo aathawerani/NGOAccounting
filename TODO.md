@@ -9,8 +9,8 @@
 - [ ] TASK-007: Import HVHT Excel File | Priority: MED | Details: User must provide the HVHT WPF export file. Use existing ImportExcelPage smart-sync.
 - [ ] TASK-008: Import BIB Excel File | Priority: MED | Details: User must provide the BIB WPF export file. Use existing ImportExcelPage smart-sync.
 - [x] TASK-009: Print Rent Receipt | Priority: MED | Details: python-docx template. GET /api/rent/receipt/{id}/print returns .docx. Frontend "Print" button on each receipt row.
-- [ ] TASK-010: Trial Balance In-App View | Priority: LOW | Details: Table of all accounts with debit total, credit total, balance. Fiscal year filter. Download CSV button.
-- [ ] TASK-011: Income Statement In-App View | Priority: LOW | Details: INCOME accounts vs EXPENSE accounts, net surplus/deficit. Fiscal year filter.
-- [ ] TASK-012: Balance Sheet In-App View | Priority: LOW | Details: ASSET / LIABILITY / EQUITY sections. Fiscal year filter.
-- [ ] TASK-013: Export Receivables to Excel | Priority: LOW | Details: GET /api/export/receivables — list of all pending receivables per trust as .xlsx.
-- [ ] TASK-014: Round-Trip Re-import Test | Priority: LOW | Details: Export HTTT full workbook → re-import → verify row counts match original (413 entries, 45 accounts).
+- [x] TASK-010: Trial Balance In-App View | Priority: LOW | Details: Table of all accounts with debit total, credit total, balance. Fiscal year filter. Download CSV button.
+- [x] TASK-011: Income Statement In-App View | Priority: LOW | Details: INCOME accounts vs EXPENSE accounts, net surplus/deficit. Fiscal year filter.
+- [x] TASK-012: Balance Sheet In-App View | Priority: LOW | Details: ASSET / LIABILITY / EQUITY sections. Fiscal year filter.
+- [x] TASK-013: Export Receivables to Excel | Priority: LOW | Details: GET /api/export/receivables — list of all pending receivables per trust as .xlsx.
+- [x] TASK-014: Round-Trip Re-import Test | Priority: LOW | Details: Export HTTT full workbook → re-import → verify row counts match original (413 entries, 45 accounts).

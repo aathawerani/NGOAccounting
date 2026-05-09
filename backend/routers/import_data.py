@@ -39,8 +39,11 @@ router = APIRouter(prefix="/api/import", tags=["import"])
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_SKIP = {"TB", "IS", "BS", "DEP SCH", "DEP SCHEDULE", "DEP.SCH", "DEP. SCH",
-         "DEPRECIATION SCHEDULE"}
+_SKIP = {
+    "TB", "IS", "BS",
+    "DEP", "DEP SCH", "DEP SCHEDULE", "DEP.SCH", "DEP. SCH", "DEPRECIATION SCHEDULE",
+    "NOTES", "CHART", "SHEET1",
+}
 
 _C_DATE        = 0
 _C_VOUCHER     = 1
@@ -240,33 +243,98 @@ def _plot_from_code(code: str) -> Optional[str]:
 # ── Trust detection ───────────────────────────────────────────────────────────
 
 _TRUST_KEYWORDS: list[tuple[set, str]] = [
-    ({"THAWER", "THARIA", "HTTT"}, "HTTT"),
-    ({"HUSSAINI", "VAKIL", "HVHT"}, "HVHT"),
-    ({"BAIT", "BURHANI", "BIB"},   "BIB"),
+    ({"HUSSAINI", "VAKIL", "HVHT", "VAROO", "HAJI VAROO", "THAWER"},  "HVHT"),
+    ({"THARIA", "HTTT", "HUSAMI", "TAHERI", "TAHIR"},                  "HTTT"),
+    ({"BAIT", "BURHANI", "BIB", "BARA", "IMAMBARGAH"},                 "BIB"),
 ]
 
 
-def _extract_trust_name(sheets: list[_Sheet]) -> Optional[str]:
-    for sh in sheets:
-        uname = sh.name.strip().upper()
-        rows = sh.rows
+def _extract_trust_name_from_xf(xf) -> Optional[str]:
+    """pandas ExcelFile path — used when the caller passes a pd.ExcelFile for testing."""
+    import math
+
+    def _cell(df, row, col):
         try:
-            if uname == "TB" and len(rows) > 2:
-                val = _s(rows[2][0] if rows[2] else None)
-                if val:
-                    return val
-            elif uname == "IS" and len(rows) > 4:
-                row4 = rows[4]
-                val = _s(row4[1] if len(row4) > 1 else None)
-                if val:
-                    return val
-            elif uname == "BS" and len(rows) > 0:
-                row0 = rows[0]
-                val = _s(row0[0] if row0 else None)
-                if val:
-                    return val
+            val = df.iloc[row, col]
+            if val is None:
+                return None
+            if isinstance(val, float) and math.isnan(val):
+                return None
+            s = str(val).strip()
+            return s if s else None
+        except (IndexError, KeyError, TypeError):
+            return None
+
+    names_upper = [n.strip().upper() for n in xf.sheet_names]
+
+    # TB: try rows 2, 4, 3 at col 0
+    if "TB" in names_upper:
+        df = xf.parse(xf.sheet_names[names_upper.index("TB")], header=None)
+        for ri in (2, 4, 3):
+            val = _cell(df, ri, 0)
+            if val:
+                return val
+
+    # IS: row 4 col 1
+    if "IS" in names_upper:
+        df = xf.parse(xf.sheet_names[names_upper.index("IS")], header=None)
+        val = _cell(df, 4, 1)
+        if val:
+            return val
+
+    # BS: row 0 col 0, then row 4 col 0
+    if "BS" in names_upper:
+        df = xf.parse(xf.sheet_names[names_upper.index("BS")], header=None)
+        for ri in (0, 4):
+            val = _cell(df, ri, 0)
+            if val:
+                return val
+
+    return None
+
+
+def _extract_trust_name(sheets) -> Optional[str]:
+    """
+    Try multiple cell positions across TB / IS / BS sheets.
+    Order: TB row2col0 → TB row4col0 → TB row3col0 → IS row4col1 → BS row0col0 → BS row4col0.
+    Accepts list[_Sheet] (from _load) or pd.ExcelFile (for testing).
+    """
+    # Duck-type: pd.ExcelFile has .sheet_names
+    if hasattr(sheets, "sheet_names"):
+        return _extract_trust_name_from_xf(sheets)
+
+    by_name: dict[str, _Sheet] = {sh.name.strip().upper(): sh for sh in sheets}
+
+    def _cell(sh: _Sheet, row_idx: int, col_idx: int) -> Optional[str]:
+        try:
+            row = sh.rows[row_idx]
+            return _s(row[col_idx] if len(row) > col_idx else None)
         except (IndexError, TypeError):
-            continue
+            return None
+
+    # TB sheet: rows 2, 4, 3 at col 0
+    tb = by_name.get("TB")
+    if tb:
+        for ri in (2, 4, 3):
+            val = _cell(tb, ri, 0)
+            if val:
+                return val
+
+    # IS sheet: row 4 col 1
+    is_sh = by_name.get("IS")
+    if is_sh:
+        val = _cell(is_sh, 4, 1)
+        if val:
+            return val
+
+    # BS sheet: row 0 col 0, then row 4 col 0
+    bs = by_name.get("BS")
+    if bs:
+        for ri in (0, 4):
+            val = _cell(bs, ri, 0)
+            if val:
+                return val
+
     return None
 
 
