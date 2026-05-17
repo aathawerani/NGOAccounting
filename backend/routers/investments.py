@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from audit import log_audit
 from database import get_db
 from models.models import Investment, InvestmentProfit, Trust
 
@@ -81,6 +82,35 @@ def list_investments(
     return [_serialize(inv) for inv in q.order_by(Investment.purchase_date.desc(), Investment.id.desc()).all()]
 
 
+@router.get("/maturing")
+def maturing_investments(
+    trust_id: Optional[int] = None,
+    days: int = 60,
+    db: Session = Depends(get_db),
+):
+    """Return ACTIVE investments whose maturity_date falls within `days` days."""
+    today = date.today()
+    cutoff = today + timedelta(days=days)
+    q = db.query(Investment).filter(
+        Investment.status == "ACTIVE",
+        Investment.maturity_date != None,
+        Investment.maturity_date >= today,
+        Investment.maturity_date <= cutoff,
+    )
+    if trust_id is not None:
+        q = q.filter(Investment.trust_id == trust_id)
+    items = q.order_by(Investment.maturity_date.asc()).all()
+    result = []
+    for inv in items:
+        days_left = (inv.maturity_date - today).days
+        urgency = "red" if days_left <= 15 else "orange" if days_left <= 30 else "yellow"
+        d = _serialize(inv)
+        d["days_remaining"] = days_left
+        d["urgency"] = urgency
+        result.append(d)
+    return result
+
+
 @router.post("", status_code=201)
 def purchase(body: PurchaseBody, db: Session = Depends(get_db)):
     if not db.query(Trust).filter(Trust.id == body.trust_id).first():
@@ -103,6 +133,9 @@ def purchase(body: PurchaseBody, db: Session = Depends(get_db)):
     db.add(inv)
     db.commit()
     db.refresh(inv)
+    log_audit(db, "investments", "create", record_id=inv.id, trust_id=inv.trust_id,
+              description=f"{inv.certificate_type} {inv.certificate_number} purchased PKR {inv.amount:,.0f}")
+    db.commit()
     return _serialize(inv)
 
 
@@ -134,6 +167,8 @@ def sell(investment_id: int, body: SellBody, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Investment not found")
     inv.status = "MATURED"
     inv.sale_date = body.sale_date
+    log_audit(db, "investments", "update", record_id=inv.id, trust_id=inv.trust_id,
+              description=f"{inv.certificate_type} {inv.certificate_number} marked matured on {body.sale_date}")
     db.commit()
     db.refresh(inv)
     return _serialize(inv)
@@ -144,5 +179,7 @@ def delete_investment(investment_id: int, db: Session = Depends(get_db)):
     inv = db.query(Investment).filter(Investment.id == investment_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Investment not found")
+    log_audit(db, "investments", "delete", record_id=investment_id, trust_id=inv.trust_id,
+              description=f"{inv.certificate_type} {inv.certificate_number} deleted PKR {inv.amount:,.0f}")
     db.delete(inv)
     db.commit()

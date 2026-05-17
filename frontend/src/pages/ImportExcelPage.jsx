@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import {
   Upload, CheckCircle, XCircle, FileSpreadsheet, AlertTriangle,
   ChevronDown, ChevronUp, Loader2, RefreshCw, ShieldCheck,
-  PlusCircle, ArrowPathRoundedSquare, Archive, AlertCircle,
+  PlusCircle, RotateCcw, Archive, AlertCircle,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -503,7 +503,7 @@ export default function ImportExcelPage() {
           {sa ? (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatBadge label="New entries"   value={fmt(sa.estimated_inserts)} color="bg-emerald-50 text-emerald-800" icon={PlusCircle} />
-              <StatBadge label="Will update"   value={fmt(sa.estimated_updates)} color="bg-blue-50 text-blue-800"     icon={ArrowPathRoundedSquare} />
+              <StatBadge label="Will update"   value={fmt(sa.estimated_updates)} color="bg-blue-50 text-blue-800"     icon={RotateCcw} />
               <StatBadge label="Will flag"     value={fmt(sa.estimated_flags)}   color="bg-amber-50 text-amber-800"   icon={Archive} />
               <StatBadge label="Tenants"       value={preview.tenants_found}     color="bg-violet-50 text-violet-800" />
             </div>
@@ -557,7 +557,7 @@ export default function ImportExcelPage() {
               label="Updated"
               value={fmt(result.transactions_updated)}
               color="bg-blue-50 text-blue-800"
-              icon={ArrowPathRoundedSquare}
+              icon={RotateCcw}
             />
             <StatBadge
               label="Flagged (missing)"

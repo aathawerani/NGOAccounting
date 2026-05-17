@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.models import AccountType, Investment, LedgerEntry, Receivable
+from routers.backup import _load_meta
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -80,4 +81,5 @@ def summary(trust_id: int, db: Session = Depends(get_db)):
             }
             for e in recent
         ],
+        "last_backup": _load_meta().get("timestamp"),
     }

@@ -14,6 +14,8 @@ import CashPositionPage from "./pages/CashPositionPage";
 import ImportExcelPage from "./pages/ImportExcelPage";
 import ExportReportsPage from "./pages/ExportReportsPage";
 import ReportsPage from "./pages/ReportsPage";
+import FiscalYearClosePage from "./pages/FiscalYearClosePage";
+import AuditLogPage from "./pages/AuditLogPage";
 
 const PAGE_LABELS = {
   dashboard: "Dashboard",
@@ -28,6 +30,8 @@ const PAGE_LABELS = {
   "import-excel": "Import Excel",
   "export-reports": "Export Reports",
   "financial-reports": "Financial Reports",
+  "fiscal-year-close": "Fiscal Year Close",
+  "audit-log": "Audit Log",
 };
 
 function PageRouter({ activePage, onNavigate }) {
@@ -56,6 +60,10 @@ function PageRouter({ activePage, onNavigate }) {
       return <ExportReportsPage />;
     case "financial-reports":
       return <ReportsPage />;
+    case "fiscal-year-close":
+      return <FiscalYearClosePage />;
+    case "audit-log":
+      return <AuditLogPage />;
     default:
       return <PlaceholderPage title={PAGE_LABELS[activePage] ?? "Dashboard"} />;
   }

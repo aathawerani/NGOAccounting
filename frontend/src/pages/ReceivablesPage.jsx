@@ -241,10 +241,21 @@ export default function ReceivablesPage() {
 
       {/* ── Stat Cards ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Overdue Tenants" value={overdueCount} sub="1+ months behind" color={overdueCount > 0 ? "red" : undefined} />
-        <StatCard label="Est. Rent Outstanding" value={PKR(totalEstOutstanding)} sub={totalEstOutstanding === 0 ? "Set rates on Tenants page" : undefined} color={totalEstOutstanding > 0 ? "amber" : undefined} />
-        <StatCard label="Pending Receivables" value={pending.length} />
-        <StatCard label="Pending Amount" value={PKR(pendingTotal)} color={pendingTotal > 0 ? "amber" : undefined} />
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 animate-pulse">
+              <div className="h-3 bg-gray-200 rounded w-24 mb-2" />
+              <div className="h-7 bg-gray-200 rounded w-20" />
+            </div>
+          ))
+        ) : (
+          <>
+            <StatCard label="Overdue Tenants" value={overdueCount} sub="1+ months behind" color={overdueCount > 0 ? "red" : undefined} />
+            <StatCard label="Est. Rent Outstanding" value={PKR(totalEstOutstanding)} sub={totalEstOutstanding === 0 ? "Set rates on Tenants page" : undefined} color={totalEstOutstanding > 0 ? "amber" : undefined} />
+            <StatCard label="Pending Receivables" value={pending.length} />
+            <StatCard label="Pending Amount" value={PKR(pendingTotal)} color={pendingTotal > 0 ? "amber" : undefined} />
+          </>
+        )}
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────────────────── */}

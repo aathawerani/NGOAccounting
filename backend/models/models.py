@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, Date, ForeignKey, Text
+from datetime import datetime as _dt_now
+from sqlalchemy import Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -232,3 +233,31 @@ class InvestmentProfit(Base):
 
     investment = relationship("Investment", back_populates="profits")
     trust = relationship("Trust")
+
+
+class FiscalYearClose(Base):
+    """Records a completed year-end close for a trust's fiscal year."""
+    __tablename__ = "fiscal_year_closes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trust_id = Column(Integer, ForeignKey("trusts.id"), nullable=False)
+    fiscal_year = Column(Integer, nullable=False)   # ending year, e.g. 2024 = Jul 2023–Jun 2024
+    closed_at = Column(DateTime, nullable=False)
+    net_surplus = Column(Float, default=0.0)        # Income − Expense for the year
+    opening_entries_count = Column(Integer, default=0)
+    closed_by_note = Column(Text)                   # optional note
+
+    trust = relationship("Trust")
+
+
+class AuditLog(Base):
+    """Tracks create/update/delete operations across key tables."""
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trust_id = Column(Integer, ForeignKey("trusts.id"), nullable=True)
+    table_name = Column(String, nullable=False, index=True)
+    record_id = Column(Integer)
+    action = Column(String, nullable=False)     # create | update | delete
+    description = Column(Text)
+    timestamp = Column(DateTime, nullable=False, default=_dt_now.utcnow)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, FileText, AlertCircle, Pencil, X, ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { Trash2, FileText, AlertCircle, Pencil, X, ArrowDownLeft, ArrowUpRight, Printer } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -232,10 +232,21 @@ export default function VouchersPage() {
 
       {/* ── Stat Cards ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Payment Vouchers" value={payments.length} />
-        <StatCard label="Total Paid Out" value={PKR(totalPaid)} color="red" sub="All payment vouchers" />
-        <StatCard label="Receipt Vouchers" value={receipts.length} />
-        <StatCard label="Total Received" value={PKR(totalReceived)} color="green" sub="All receipt vouchers" />
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 animate-pulse">
+              <div className="h-3 bg-gray-200 rounded w-24 mb-2" />
+              <div className="h-7 bg-gray-200 rounded w-20" />
+            </div>
+          ))
+        ) : (
+          <>
+            <StatCard label="Payment Vouchers" value={payments.length} />
+            <StatCard label="Total Paid Out" value={PKR(totalPaid)} color="red" sub="All payment vouchers" />
+            <StatCard label="Receipt Vouchers" value={receipts.length} />
+            <StatCard label="Total Received" value={PKR(totalReceived)} color="green" sub="All receipt vouchers" />
+          </>
+        )}
       </div>
 
       {/* ── Form ─────────────────────────────────────────────────────────── */}
@@ -439,6 +450,10 @@ export default function VouchersPage() {
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <a href={`${API}/api/vouchers/${v.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors" title="Print PDF">
+                            <Printer className="w-4 h-4" />
+                          </a>
                           <button onClick={() => startEdit(v)}
                             className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Edit">
                             <Pencil className="w-4 h-4" />

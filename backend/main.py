@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, SessionLocal
-from models.models import Base, Trust, Plot, AccountType, LedgerEntry
+from models.models import Base, Trust, Plot, AccountType, LedgerEntry, FiscalYearClose
 from routers import tenants as tenants_router
 from routers import plots as plots_router
 from routers import rent as rent_router
@@ -21,6 +21,10 @@ from routers import import_data as import_router
 from routers import export_data as export_router
 from routers import dashboard as dashboard_router
 from routers import reports as reports_router
+from routers import backup as backup_router
+from routers import fiscal_year as fiscal_year_router
+from routers import search as search_router
+from routers import audit_log as audit_log_router
 
 
 @asynccontextmanager
@@ -56,6 +60,10 @@ app.include_router(import_router.router)
 app.include_router(export_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(reports_router.router)
+app.include_router(backup_router.router)
+app.include_router(fiscal_year_router.router)
+app.include_router(search_router.router)
+app.include_router(audit_log_router.router)
 
 
 # ── Migrations ───────────────────────────────────────────────────────────────

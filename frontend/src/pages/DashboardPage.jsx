@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
 import {
   Banknote, Inbox, TrendingUp, ArrowRight, Wallet, AlertTriangle,
+  HardDrive, CheckCircle, Loader2, Bell, RotateCcw,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -60,6 +61,9 @@ export default function DashboardPage({ onNavigate }) {
   const { selectedTrust } = useTrust();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [backing, setBacking] = useState(false);
+  const [backupMsg, setBackupMsg] = useState(null);
+  const [maturing, setMaturing] = useState([]);
 
   const fetchSummary = useCallback(async () => {
     if (!selectedTrust) return;
@@ -75,7 +79,35 @@ export default function DashboardPage({ onNavigate }) {
     }
   }, [selectedTrust]);
 
-  useEffect(() => { fetchSummary(); }, [fetchSummary]);
+  const fetchMaturing = useCallback(async () => {
+    if (!selectedTrust) return;
+    try {
+      const res = await fetch(`${API}/api/investments/maturing?trust_id=${selectedTrust.id}&days=60`);
+      if (!res.ok) return;
+      setMaturing(await res.json());
+    } catch { /* ignore */ }
+  }, [selectedTrust]);
+
+  useEffect(() => { fetchSummary(); fetchMaturing(); }, [fetchSummary, fetchMaturing]);
+
+  const runBackup = useCallback(async () => {
+    setBacking(true);
+    setBackupMsg(null);
+    try {
+      const res = await fetch(`${API}/api/backup/create`, { method: "POST" });
+      const json = await res.json();
+      if (json.ok) {
+        setBackupMsg({ ok: true, text: `Backup saved — ${json.excel_files.length} Excel file(s) + DB snapshot` });
+        fetchSummary(); // refresh last_backup timestamp
+      } else {
+        setBackupMsg({ ok: false, text: "Backup failed" });
+      }
+    } catch {
+      setBackupMsg({ ok: false, text: "Could not reach server" });
+    } finally {
+      setBacking(false);
+    }
+  }, [fetchSummary]);
 
   const trustColor = selectedTrust?.code === "HVHT" ? "emerald"
     : selectedTrust?.code === "BIB" ? "blue"
@@ -140,6 +172,57 @@ export default function DashboardPage({ onNavigate }) {
             color="violet"
             onClick={() => onNavigate("journal-entries")}
           />
+        </div>
+      )}
+
+      {/* ── Investment Maturity Alerts ───────────────────────────────────── */}
+      {maturing.length > 0 && (
+        <div className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-amber-100 bg-amber-50/60">
+            <div className="flex items-center gap-2">
+              <Bell className="w-4 h-4 text-amber-600" />
+              <h2 className="text-sm font-semibold text-amber-800">
+                Maturing Soon — {maturing.length} certificate{maturing.length !== 1 ? "s" : ""}
+              </h2>
+            </div>
+            <button onClick={() => onNavigate("investments")}
+              className="text-xs font-medium text-amber-700 hover:underline">
+              Manage Investments →
+            </button>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {maturing.map(inv => {
+              const urgencyClasses = inv.urgency === "red"
+                ? { badge: "bg-red-100 text-red-700", days: "text-red-600" }
+                : inv.urgency === "orange"
+                  ? { badge: "bg-orange-100 text-orange-700", days: "text-orange-600" }
+                  : { badge: "bg-amber-100 text-amber-700", days: "text-amber-600" };
+              return (
+                <div key={inv.id} className="flex items-center gap-4 px-5 py-3">
+                  <div className={cn("flex-shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold", urgencyClasses.badge)}>
+                    {inv.certificate_type}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">
+                      {inv.certificate_number}
+                      {inv.folio_number && <span className="text-gray-400 font-normal ml-1">({inv.folio_number})</span>}
+                    </p>
+                    <p className="text-xs text-gray-400">Matures {inv.maturity_date} · {PKR(inv.amount)}</p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className={cn("text-sm font-bold", urgencyClasses.days)}>
+                      {inv.days_remaining}d
+                    </p>
+                    <p className="text-xs text-gray-400">remaining</p>
+                  </div>
+                  <button onClick={() => onNavigate("investments")} title="Renew"
+                    className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors flex-shrink-0">
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -241,6 +324,36 @@ export default function DashboardPage({ onNavigate }) {
             <ArrowRight className="inline w-3.5 h-3.5 ml-1 text-gray-400" />
           </button>
         ))}
+      </div>
+
+      {/* ── Backup ───────────────────────────────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-5 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <HardDrive className="w-5 h-5 text-gray-400 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-700">Data Backup</p>
+          <p className="text-xs text-gray-400">
+            {data?.last_backup
+              ? <>Last backup: <span className="font-medium text-gray-600">{fmtDate(data.last_backup)}</span></>
+              : "No backup yet — click to create one"}
+          </p>
+        </div>
+        {backupMsg && (
+          <div className={cn(
+            "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg",
+            backupMsg.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-600"
+          )}>
+            {backupMsg.ok && <CheckCircle className="w-3.5 h-3.5" />}
+            {backupMsg.text}
+          </div>
+        )}
+        <button
+          onClick={runBackup}
+          disabled={backing}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 shrink-0"
+        >
+          {backing ? <Loader2 className="w-4 h-4 animate-spin" /> : <HardDrive className="w-4 h-4" />}
+          {backing ? "Backing up…" : "Backup Now"}
+        </button>
       </div>
     </div>
   );

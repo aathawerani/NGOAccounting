@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, Receipt, AlertCircle, Pencil, X, ChevronDown, ChevronRight, Printer } from "lucide-react";
+import { Trash2, Receipt, AlertCircle, Pencil, X, ChevronDown, ChevronRight, Printer, FileDown } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -652,9 +652,13 @@ export default function RentEntryPage() {
                     <td className="px-4 py-3 text-right font-semibold text-emerald-700">{PKR(r.total_amount)}</td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <a href={`${API}/api/rent/receipt/${r.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors" title="Print PDF receipt">
+                          <Printer className="w-4 h-4" />
+                        </a>
                         <a href={`${API}/api/rent/receipt/${r.id}/print`} download
                           className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Download receipt (.docx)">
-                          <Printer className="w-4 h-4" />
+                          <FileDown className="w-4 h-4" />
                         </a>
                         <button onClick={() => startEdit(r)}
                           className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit">

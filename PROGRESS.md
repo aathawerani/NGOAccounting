@@ -143,6 +143,76 @@
 | Balance Sheet tab | ✅ Done | Two-column ASSETS vs LIAB+EQUITY, net profit row, balance check alert |
 | Fiscal year filter | ✅ Done | Year dropdown (2020–current) or "All Periods" |
 | Backend endpoints | ✅ Done | `/api/reports/trial-balance`, `/api/reports/income-statement`, `/api/reports/balance-sheet` |
+| PDF export | ✅ Done | POST `/api/reports/pdf` — A4 reportlab PDF, opens inline in new tab |
+
+### PDF Printing (TASK-020)
+| Feature | Status | Notes |
+|---|---|---|
+| Shared `pdf_utils.py` | ✅ Done | NGODoc class, `amount_in_words`, `hijri_str` |
+| Voucher PDF | ✅ Done | GET `/api/vouchers/{id}/pdf` — A5 with letterhead, accounts, amount in words |
+| Rent Receipt PDF | ✅ Done | GET `/api/rent/receipt/{id}/pdf` — A5 with tenant details, rent/water lines |
+| Frontend print buttons | ✅ Done | VouchersPage + RentEntryPage — printer icon opens inline in new tab |
+
+### Tenant Statement (TASK-022)
+| Feature | Status | Notes |
+|---|---|---|
+| `GET /api/tenants/{id}/statement` | ✅ Done | Month-by-month rows with running arrears |
+| `GET /api/tenants/{id}/statement/pdf` | ✅ Done | A4 inline PDF with receipt table |
+| Statement modal in TenantsPage | ✅ Done | FileText icon per row → wide modal with year picker, summary strip, table, Print PDF button |
+
+### Investment Maturity Alerts (TASK-023)
+| Feature | Status | Notes |
+|---|---|---|
+| `GET /api/investments/maturing` | ✅ Done | Returns ACTIVE certs maturing within N days, with urgency=red/orange/yellow |
+| Dashboard alert widget | ✅ Done | Shows amber banner with list of maturing certs; color-coded days remaining |
+
+### Audit Log (TASK-024)
+| Feature | Status | Notes |
+|---|---|---|
+| `AuditLog` model | ✅ Done | audit_logs table — trust_id, table, record_id, action, description, timestamp |
+| `audit.py` helper | ✅ Done | `log_audit(db, ...)` called after each create/update/delete |
+| `GET /api/audit-log` | ✅ Done | Filterable by trust/table/action, paginated |
+| Audit hooks | ✅ Done | vouchers, rent_receipts, tenants, investments — create/update/delete all logged |
+| AuditLogPage | ✅ Done | Table with timestamp/action/table/description; filters + client-side search; pagination |
+| Sidebar entry | ✅ Done | Under "Settings" section |
+
+---
+
+### App Launcher & Packaging
+| Feature | Status | Notes |
+|---|---|---|
+| `launch.py` tray launcher | ✅ Done | pystray + Pillow; starts FastAPI + Vite, opens browser, system tray icon |
+| Desktop shortcut | ✅ Done | `create_shortcut.ps1` → `NGO Accounting.lnk` on Desktop |
+| `NGO Accounting.vbs` | ✅ Done | Silent launcher (no console window) via WScript |
+
+### Backup System
+| Feature | Status | Notes |
+|---|---|---|
+| `POST /api/backup/create` | ✅ Done | DB snapshot + Excel workbooks per trust → `backend/Backups/` |
+| `GET /api/backup/last` | ✅ Done | Returns last backup timestamp |
+| Dashboard backup button | ✅ Done | "Backup Now" button + last backup date display |
+
+### Fiscal Year Closing
+| Feature | Status | Notes |
+|---|---|---|
+| `FiscalYearClose` model | ✅ Done | Added to `models.py` |
+| `GET /api/fiscal-year/preview` | ✅ Done | Shows income/expense/surplus + balance accounts |
+| `POST /api/fiscal-year/close` | ✅ Done | Books surplus to GF, creates opening balance entries |
+| `GET /api/fiscal-year/closed-years` | ✅ Done | Lists all closed FYs per trust |
+| `FiscalYearClosePage.jsx` | ✅ Done | Year selector, preview table, confirm dialog, closed years list |
+
+### Global Search
+| Feature | Status | Notes |
+|---|---|---|
+| `GET /api/search?trust_id=X&q=Y` | ✅ Done | Searches particulars, party_name, receipt_no, account_code, amounts |
+| Search bar in TopBar | ✅ Done | Debounced 300ms, dropdown with 20 results, DR/CR amounts shown |
+
+### UI Polish
+| Feature | Status | Notes |
+|---|---|---|
+| Shared `ui.jsx` components | ✅ Done | Skeleton, SkeletonTable, EmptyState, StatCard, PageHeader, Badge, Btn |
+| Stat card loading skeletons | ✅ Done | VouchersPage, MajlisBillsPage, ReceivablesPage now show skeleton cards while loading |
+| `ArrowPathRoundedSquare` import fix | ✅ Fixed | ImportExcelPage replaced with `RotateCcw` — build was broken |
 
 ---
 
@@ -157,6 +227,8 @@
 4. ~~**GF classified as CAPITAL not EQUITY**~~ **FIXED** — `export_data.py` `_build_balance_sheet` and `/api/reports/balance-sheet` now include both `EQUITY` and `CAPITAL` account types in equity section.
 
 5. ~~**Tenant rent/water amounts are 0 after import**~~ **FIXED** — `POST /api/tenants/backfill-rates` mines `RENT @N` / `WATER @N` patterns from ledger; "Fix Rates" button on TenantsPage calls it.
+
+6. ~~**`ArrowPathRoundedSquare` missing from lucide-react**~~ **FIXED 2026-05-16** — Replaced with `RotateCcw` in ImportExcelPage; frontend build now passes cleanly.
 
 ---
 
@@ -285,3 +357,72 @@
 **TASK-014: Round-Trip Re-import Test**
 - Verified HTTT export → re-import: 413 transactions, 0 would-insert, 0 would-flag — lossless
 - Note: DEP account sheet is skipped by `_SKIP` list (added per urgent fix); its 0 entries still round-trip correctly (no entries are in DEP in the original data)
+
+---
+
+### Session 2026-05-17 — TASK-020 through TASK-024
+
+**TASK-020: Print/PDF export**
+- `backend/pdf_utils.py` (NEW): Shared NGODoc class wrapping reportlab — letterhead, KV rows, line items with totals, signature block; `amount_in_words` (PKR Crore/Lakh/Thousand); `hijri_str` via hijri_converter
+- `routers/vouchers.py`: Added `GET /{id}/pdf` — A5 voucher PDF inline
+- `routers/rent.py`: Added `GET /receipt/{id}/pdf` — A5 receipt PDF inline
+- `VouchersPage.jsx`: Printer icon opens PDF in new tab
+- `RentEntryPage.jsx`: Printer (PDF) + FileDown (DOCX) buttons per receipt row
+
+**TASK-021: Reports PDF export**
+- `routers/reports.py`: Added `POST /api/reports/pdf` with `ReportPDFBody` — builds A4 reportlab for income-statement / balance-sheet / trial-balance; page numbers via canvas callback
+- `ReportsPage.jsx`: Added "Export PDF" button; fetches blob, opens in new tab
+
+**TASK-022: Tenant Statement**
+- `routers/tenants.py`: Added `GET /{id}/statement` (JSON) + `GET /{id}/statement/pdf` (A4 inline PDF)
+- `TenantsPage.jsx`: Added StatementModal — FileText icon per row, wide modal with year picker (chevron nav), summary strip (Total Due / Total Paid / Outstanding), receipt table with totals footer, Print PDF button
+
+**TASK-023: Investment Maturity Alerts**
+- `routers/investments.py`: Added `GET /maturing?trust_id=X&days=60` — returns ACTIVE certs within N days, adds `days_remaining` and `urgency` fields (red ≤15 / orange ≤30 / yellow ≤60)
+- `DashboardPage.jsx`: Fetches maturing investments; shows amber alert banner with color-coded days and Renew (navigate) button
+
+**TASK-024: Audit Log**
+- `models/models.py`: Added `AuditLog` model (trust_id, table_name, record_id, action, description, timestamp)
+- `backend/audit.py` (NEW): `log_audit()` helper — appends AuditLog row, does not commit
+- `routers/audit_log.py` (NEW): `GET /api/audit-log` with trust/table/action filters + offset/limit pagination
+- `main.py`: Registered audit_log router
+- Hooks added to: vouchers (create/update/delete), rent_receipts (create/delete), tenants (create/update/delete), investments (create/sell/delete)
+- `AuditLogPage.jsx` (NEW): Timestamp, action badge, table badge, record ID, description; client search, server-side filters, pagination
+- `Sidebar.jsx`: Added "Settings" section with "Audit Log" link
+- `App.jsx`: Wired route and page label
+
+**Frontend build: ✅ clean (462 kB JS, 37 kB CSS, 1.56s)**
+
+### Session 2026-05-16 — TASK-015 through TASK-019
+
+**TASK-015: App Packaging**
+- `launch.py` — Python launcher using pystray + Pillow: starts uvicorn + npm dev in background, waits for backend, opens browser, shows tray icon with "Open Browser" / "Stop Server" menu
+- `NGO Accounting.vbs` — Silent WScript launcher (no console window)
+- `create_shortcut.ps1` — Creates `NGO Accounting.lnk` on Desktop pointing to the VBS
+- Installed `pystray==0.19.5` and `Pillow==12.2.0` globally
+
+**TASK-016: Data Backup System**
+- `routers/backup.py` (NEW): `POST /api/backup/create` — copies DB, builds full Excel workbook for every trust, saves to `backend/Backups/`, persists `last_backup.json`; `GET /api/backup/last` returns last backup timestamp
+- `main.py`: Registered backup router
+- `routers/dashboard.py`: Imports `_load_meta` from backup, appends `last_backup` timestamp to summary response
+- `DashboardPage.jsx`: Added backup bar at bottom — "Backup Now" button, last backup date, success/error toast
+
+**TASK-017: Fiscal Year Closing**
+- `models/models.py`: Added `FiscalYearClose` model (trust_id, fiscal_year, closed_at, net_surplus, opening_entries_count, note)
+- `routers/fiscal_year.py` (NEW): `GET /preview`, `POST /close`, `GET /closed-years`, `GET /is-locked` — closes income/expense to GF, creates Balance b/d opening entries for next FY
+- `FiscalYearClosePage.jsx` (NEW): Year picker, preview (income/expense/surplus + balance accounts table), closing note, confirm dialog, closed years list
+- Wired route, sidebar entry ("Fiscal Year Close"), TopBar title
+- `main.py`: Registered fiscal_year router + imported FiscalYearClose model
+
+**TASK-018: Global Search**
+- `routers/search.py` (NEW): `GET /api/search?trust_id=X&q=Y` — searches ledger_entries by particulars, party_name, receipt_no, account_code, contra, amounts (numeric detect); limit=50
+- `main.py`: Registered search router
+- `TopBar.jsx`: Added `SearchBar` component — 300ms debounce, dropdown with up to 20 results (date, particulars, account codes, DR/CR amounts), outside-click dismissal
+
+**TASK-019: UI Polish**
+- `components/ui.jsx` (NEW): Shared components — `Skeleton`, `SkeletonTable`, `SkeletonCard`, `EmptyState`, `StatCard`, `PageHeader`, `Badge`, `Btn`
+- `VouchersPage.jsx`: Stat cards now show skeleton animation while loading
+- `MajlisBillsPage.jsx`: Stat cards now show skeleton animation while loading
+- `ReceivablesPage.jsx`: Stat cards now show skeleton animation while loading
+- `ImportExcelPage.jsx`: Fixed broken `ArrowPathRoundedSquare` import → replaced with `RotateCcw` (frontend build was failing)
+- Frontend build: verified clean (`vite build` 762ms, no errors)

@@ -9,6 +9,7 @@ import {
   ArrowUpDown,
   Receipt,
   LayoutDashboard,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -65,6 +66,15 @@ const NAV_SECTIONS = [
     children: [
       { id: "import-excel", label: "Import Excel" },
       { id: "export-reports", label: "Export Reports" },
+      { id: "fiscal-year-close", label: "Fiscal Year Close" },
+    ],
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    icon: ShieldCheck,
+    children: [
+      { id: "audit-log", label: "Audit Log" },
     ],
   },
 ];

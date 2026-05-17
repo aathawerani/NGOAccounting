@@ -3,6 +3,7 @@ import { useTrust } from "../context/TrustContext";
 import {
   Plus, Search, Edit2, Trash2, X, Check, Users, ChevronDown,
   AlertTriangle, Loader2, CheckCircle2, XCircle, CreditCard,
+  FileText, Printer, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -50,6 +51,7 @@ export default function TenantsPage() {
   const [filterStatus, setFilterStatus] = useState("all");
 
   const [modal, setModal]           = useState(null);
+  const [stmtYear, setStmtYear]     = useState(new Date().getFullYear());
   const [form, setForm]             = useState(EMPTY_FORM);
   const [formError, setFormError]   = useState(null);
   const [deleteError, setDeleteError] = useState(null);
@@ -144,6 +146,10 @@ export default function TenantsPage() {
   function openDelete(tenant) {
     setDeleteError(null);
     setModal({ type: "delete", tenant });
+  }
+  function openStatement(tenant) {
+    setStmtYear(new Date().getFullYear());
+    setModal({ type: "statement", tenant });
   }
   function closeModal() {
     setModal(null); setFormError(null); setDeleteError(null);
@@ -275,7 +281,8 @@ export default function TenantsPage() {
                 {filtered.map(tenant => (
                   <TenantRow key={tenant.id} tenant={tenant}
                     onEdit={() => openEdit(tenant)}
-                    onDelete={() => openDelete(tenant)} />
+                    onDelete={() => openDelete(tenant)}
+                    onStatement={() => openStatement(tenant)} />
                 ))}
               </tbody>
             </table>
@@ -291,7 +298,7 @@ export default function TenantsPage() {
 
       {/* Modal */}
       {modal && (
-        <ModalOverlay onClose={closeModal}>
+        <ModalOverlay onClose={closeModal} wide={modal.type === "statement"}>
           {modal.type === "form" ? (
             <TenantFormModal
               mode={modal.mode} form={form} setForm={setForm}
@@ -299,6 +306,11 @@ export default function TenantsPage() {
               tenant={modal.tenant}
               error={formError} saving={saving}
               onSubmit={handleSubmit} onClose={closeModal} />
+          ) : modal.type === "statement" ? (
+            <StatementModal
+              tenant={modal.tenant}
+              year={stmtYear} setYear={setStmtYear}
+              onClose={closeModal} />
           ) : (
             <DeleteModal tenant={modal.tenant} error={deleteError}
               deleting={deleting} onConfirm={handleDelete} onClose={closeModal} />
@@ -322,7 +334,7 @@ function StatCard({ label, value, valueClass }) {
   );
 }
 
-function TenantRow({ tenant, onEdit, onDelete }) {
+function TenantRow({ tenant, onEdit, onDelete, onStatement }) {
   const lastPaid = fmtLastPaid(tenant.last_paid_month, tenant.last_paid_year);
   return (
     <tr className="hover:bg-gray-50/60 transition-colors group">
@@ -375,6 +387,10 @@ function TenantRow({ tenant, onEdit, onDelete }) {
       {/* Actions */}
       <td className="px-4 py-3">
         <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={onStatement} title="Statement"
+            className="p-1.5 rounded-md hover:bg-emerald-50 text-gray-400 hover:text-emerald-600 transition-colors">
+            <FileText className="w-3.5 h-3.5" />
+          </button>
           <button onClick={onEdit} title="Edit"
             className="p-1.5 rounded-md hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors">
             <Edit2 className="w-3.5 h-3.5" />
@@ -389,11 +405,11 @@ function TenantRow({ tenant, onEdit, onDelete }) {
   );
 }
 
-function ModalOverlay({ children, onClose }) {
+function ModalOverlay({ children, onClose, wide }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-full max-w-xl">{children}</div>
+      <div className={cn("relative w-full", wide ? "max-w-4xl" : "max-w-xl")}>{children}</div>
     </div>
   );
 }
@@ -534,6 +550,151 @@ function TenantFormModal({ mode, form, setForm, plots, selectedTrust, tenant, er
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function StatementModal({ tenant, year, setYear, onClose }) {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+
+  const currentYear = new Date().getFullYear();
+  const yearOptions = Array.from({ length: 6 }, (_, i) => currentYear - i);
+
+  useEffect(() => {
+    setLoading(true); setError(null); setData(null);
+    fetch(`${API}/tenants/${tenant.id}/statement?year=${year}`)
+      .then(r => { if (!r.ok) throw new Error("Failed to load statement"); return r.json(); })
+      .then(setData)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [tenant.id, year]);
+
+  const pdfUrl = `${API}/tenants/${tenant.id}/statement/pdf?year=${year}`;
+
+  return (
+    <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 max-h-[90vh] flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 sticky top-0 bg-white z-10 rounded-t-2xl">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-full bg-emerald-50 flex items-center justify-center flex-shrink-0">
+            <FileText className="w-4 h-4 text-emerald-600" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-gray-900 truncate">{tenant.name}</h2>
+            <p className="text-xs text-gray-400 truncate">{fmtSpace(tenant)}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+          {/* Year picker */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg px-1 py-1">
+            <button onClick={() => setYear(y => Math.min(currentYear, y + 1))} disabled={year >= currentYear}
+              className="p-1 rounded hover:bg-white disabled:opacity-30 transition-colors">
+              <ChevronLeft className="w-3.5 h-3.5 text-gray-600" />
+            </button>
+            <span className="text-sm font-semibold text-gray-700 w-10 text-center">{year}</span>
+            <button onClick={() => setYear(y => Math.max(currentYear - 10, y - 1))}
+              className="p-1 rounded hover:bg-white transition-colors">
+              <ChevronRight className="w-3.5 h-3.5 text-gray-600" />
+            </button>
+          </div>
+          <a href={pdfUrl} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors">
+            <Printer className="w-3.5 h-3.5" /> Print PDF
+          </a>
+          <button onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="overflow-auto flex-1">
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="w-7 h-7 text-emerald-500 animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <AlertTriangle className="w-8 h-8 text-red-400 mb-2" />
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+        ) : data?.rows?.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <FileText className="w-10 h-10 text-gray-200 mb-3" />
+            <p className="text-sm font-medium text-gray-500">No receipts for {year}</p>
+            <p className="text-xs text-gray-400 mt-1">Try a different year</p>
+          </div>
+        ) : data ? (() => {
+          const rows = data.rows ?? [];
+          const totalRentDue  = rows.reduce((s, r) => s + (r.rent_due  ?? 0), 0);
+          const totalWaterDue = rows.reduce((s, r) => s + (r.water_due ?? 0), 0);
+          const totalRentPaid  = rows.reduce((s, r) => s + (r.rent_paid  ?? 0), 0);
+          const totalWaterPaid = rows.reduce((s, r) => s + (r.water_paid ?? 0), 0);
+          const totalPaid = data.total_paid ?? 0;
+          const outstanding = totalRentDue + totalWaterDue - totalPaid;
+          return (
+            <>
+              {/* Summary strip */}
+              <div className="grid grid-cols-3 gap-px bg-gray-100 border-b border-gray-100">
+                {[
+                  { label: "Total Due",   value: totalRentDue + totalWaterDue, color: "text-gray-700" },
+                  { label: "Total Paid",  value: totalPaid,                    color: "text-emerald-600" },
+                  { label: "Outstanding", value: outstanding,                  color: outstanding > 0 ? "text-red-500" : "text-emerald-600" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="bg-white px-5 py-3">
+                    <p className="text-xs text-gray-400 uppercase tracking-wide">{label}</p>
+                    <p className={cn("text-lg font-bold mt-0.5 font-mono", color)}>
+                      PKR {Math.max(0, Math.round(value)).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Table */}
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    {["#","Date","Period","Rent Due","Water Due","Rent Paid","Water Paid","Total Paid"].map((h, i) => (
+                      <th key={h} className={cn(
+                        "px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap",
+                        i === 0 ? "text-center w-8" : i <= 2 ? "text-left" : "text-right"
+                      )}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {rows.map((r, i) => (
+                    <tr key={r.receipt_id} className="hover:bg-gray-50/60 transition-colors">
+                      <td className="px-3 py-2.5 text-center text-gray-400">{i + 1}</td>
+                      <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{r.date}</td>
+                      <td className="px-3 py-2.5 text-gray-700 font-medium whitespace-nowrap">{r.period}</td>
+                      {[r.rent_due, r.water_due, r.rent_paid, r.water_paid, r.total_paid].map((v, j) => (
+                        <td key={j} className={cn("px-3 py-2.5 text-right font-mono whitespace-nowrap",
+                          j === 4 ? "font-semibold text-emerald-700" : "text-gray-600")}>
+                          {v > 0 ? v.toLocaleString() : <span className="text-gray-300">—</span>}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-800 text-white">
+                    <td colSpan={3} className="px-3 py-2.5 font-semibold text-xs uppercase tracking-wide">Totals</td>
+                    {[totalRentDue, totalWaterDue, totalRentPaid, totalWaterPaid, totalPaid].map((v, j) => (
+                      <td key={j} className="px-3 py-2.5 text-right font-mono font-semibold whitespace-nowrap">
+                        PKR {Math.round(v).toLocaleString()}
+                      </td>
+                    ))}
+                  </tr>
+                </tfoot>
+              </table>
+            </>
+          );
+        })() : null}
+      </div>
     </div>
   );
 }

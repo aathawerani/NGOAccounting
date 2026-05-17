@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { Download } from "lucide-react";
+import { Download, FileText, Loader2 } from "lucide-react";
 import { useTrust } from "../context/TrustContext";
+
+const API = "http://localhost:8000";
 
 const TABS = [
   { id: "tb", label: "Trial Balance" },
@@ -320,12 +322,41 @@ function BalanceSheetTab({ trustId, year }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
+const REPORT_TYPE_MAP = { tb: "trial-balance", is: "income-statement", bs: "balance-sheet" };
+
 export default function ReportsPage() {
   const { selectedTrust } = useTrust();
   const [activeTab, setActiveTab] = useState("tb");
   const [year, setYear] = useState(String(CURRENT_YEAR));
+  const [pdfLoading, setPdfLoading] = useState(false);
 
   const trustId = selectedTrust?.id;
+
+  async function exportPdf() {
+    if (!trustId) return;
+    setPdfLoading(true);
+    try {
+      const body = {
+        trust_id: trustId,
+        report_type: REPORT_TYPE_MAP[activeTab] || activeTab,
+        year: year === "all" ? null : parseInt(year),
+      };
+      const res = await fetch(`${API}/api/reports/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setPdfLoading(false);
+    }
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -338,17 +369,29 @@ export default function ReportsPage() {
           </p>
         </div>
 
-        {/* Year filter */}
-        <select
-          value={year}
-          onChange={(e) => setYear(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-        >
-          <option value="all">All Periods</option>
-          {YEARS.map((y) => (
-            <option key={y} value={String(y)}>{y}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-3">
+          {/* PDF export */}
+          <button
+            onClick={exportPdf}
+            disabled={pdfLoading || !trustId}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+          >
+            {pdfLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+            Export PDF
+          </button>
+
+          {/* Year filter */}
+          <select
+            value={year}
+            onChange={(e) => setYear(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          >
+            <option value="all">All Periods</option>
+            {YEARS.map((y) => (
+              <option key={y} value={String(y)}>{y}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Tabs */}

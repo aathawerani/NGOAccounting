@@ -8,9 +8,19 @@
 - [x] TASK-006: Fix GF/CAPITAL vs EQUITY Bug | Priority: MED | Details: WPF import overwrites GF to CAPITAL. Balance Sheet equity section must include both EQUITY and CAPITAL account_type values so GF appears correctly.
 - [ ] TASK-007: Import HVHT Excel File | Priority: MED | Details: User must provide the HVHT WPF export file. Use existing ImportExcelPage smart-sync.
 - [ ] TASK-008: Import BIB Excel File | Priority: MED | Details: User must provide the BIB WPF export file. Use existing ImportExcelPage smart-sync.
+- [x] TASK-015: App packaging — Python launcher script (subprocess + webbrowser) that starts FastAPI, opens browser to localhost:5173, shows system tray icon with "Stop Server" option
+- [x] TASK-016: Data backup system — backup button on dashboard: copies DB to timestamped file, exports Excel workbooks for all 3 trusts, saves to Backups folder, shows last backup date on dashboard
+- [x] TASK-017: Fiscal year closing — year-end close feature: calculates closing balances, creates opening balance entries for new FY, archives closed year, prevents editing closed entries
+- [x] TASK-018: Global search — search bar in top bar that searches ledger entries by particulars/party_name/voucher_no/amount for current trust
+- [x] TASK-019: UI polish — empty states, loading skeletons, consistent button styles, alignment/spacing fixes, page titles and breadcrumbs
 - [x] TASK-009: Print Rent Receipt | Priority: MED | Details: python-docx template. GET /api/rent/receipt/{id}/print returns .docx. Frontend "Print" button on each receipt row.
 - [x] TASK-010: Trial Balance In-App View | Priority: LOW | Details: Table of all accounts with debit total, credit total, balance. Fiscal year filter. Download CSV button.
 - [x] TASK-011: Income Statement In-App View | Priority: LOW | Details: INCOME accounts vs EXPENSE accounts, net surplus/deficit. Fiscal year filter.
 - [x] TASK-012: Balance Sheet In-App View | Priority: LOW | Details: ASSET / LIABILITY / EQUITY sections. Fiscal year filter.
 - [x] TASK-013: Export Receivables to Excel | Priority: LOW | Details: GET /api/export/receivables — list of all pending receivables per trust as .xlsx.
 - [x] TASK-014: Round-Trip Re-import Test | Priority: LOW | Details: Export HTTT full workbook → re-import → verify row counts match original (413 entries, 45 accounts).
+- [x] TASK-020: Print/PDF export for individual vouchers and rent receipts — A4/A5 document with trust letterhead, Hijri date, amounts in words, signature line; frontend opens in new tab
+- [x] TASK-021: Profit & Loss and Balance Sheet PDF export — "Export PDF" on Financial Reports page; reportlab with letterhead, account hierarchy, page numbers, timestamp
+- [x] TASK-022: Tenant ledger/statement — Statement sub-tab on Tenants page; month-by-month rent history; GET /api/tenants/{id}/statement; PDF export
+- [x] TASK-023: Investment maturity alerts — "Maturing Soon" card on Dashboard; GET /api/investments/maturing?days=60; red/orange/yellow colour coding; Renew button
+- [x] TASK-024: Audit log — AuditLog table; log every create/update/delete; GET /api/audit-log; new Audit Log page under Settings
