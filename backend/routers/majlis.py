@@ -15,6 +15,7 @@ class MajlisBillBody(BaseModel):
     trust_id: int
     date: date
     debit_account_code: str = "CASH"
+    cash_received: Optional[float] = None   # None = fully paid (= total)
     hijri_day: Optional[str] = None
     hijri_month: Optional[str] = None
     hijri_year: Optional[str] = None
@@ -38,6 +39,15 @@ class MajlisBillBody(BaseModel):
     gas: float = 0.0
     loud_speaker: float = 0.0
     molana: float = 0.0
+
+
+def _cash_status(cash_received: float, total: float) -> str:
+    if cash_received <= 0:
+        return "ADVANCE"
+    elif cash_received >= total:
+        return "PAID"
+    else:
+        return "SHORT"
 
 
 def _next_serial(trust_id: int, db: Session) -> str:
@@ -89,6 +99,9 @@ def _serialize(b: MajlisBill) -> dict:
         "loud_speaker": b.loud_speaker,
         "molana": b.molana,
         "total_amount": b.total_amount,
+        "cash_received": b.cash_received,
+        "cash_status": b.cash_status or "PAID",
+        "shortfall": round(max(0.0, (b.total_amount or 0.0) - (b.cash_received or 0.0)), 2),
     }
 
 
@@ -170,6 +183,8 @@ def create_bill(body: MajlisBillBody, db: Session = Depends(get_db)):
 
     milk_total, sugar_total, tea_total, total = _calc_totals(body)
 
+    cash_recv = body.cash_received if body.cash_received is not None else total
+
     bill = MajlisBill(
         trust_id=body.trust_id,
         date=body.date,
@@ -201,6 +216,8 @@ def create_bill(body: MajlisBillBody, db: Session = Depends(get_db)):
         loud_speaker=body.loud_speaker,
         molana=body.molana,
         total_amount=total,
+        cash_received=cash_recv,
+        cash_status=_cash_status(cash_recv, total),
     )
     db.add(bill)
     db.commit()
@@ -246,6 +263,9 @@ def update_bill(bill_id: int, body: MajlisBillBody, db: Session = Depends(get_db
     bill.loud_speaker = body.loud_speaker
     bill.molana = body.molana
     bill.total_amount = total
+    cash_recv = body.cash_received if body.cash_received is not None else total
+    bill.cash_received = cash_recv
+    bill.cash_status = _cash_status(cash_recv, total)
 
     db.commit()
     db.refresh(bill)
@@ -254,6 +274,36 @@ def update_bill(bill_id: int, body: MajlisBillBody, db: Session = Depends(get_db
     _create_journal_entries(bill, body.debit_account_code, db)
     db.commit()
 
+    return _serialize(bill)
+
+
+@router.get("/receivables")
+def list_receivables(trust_id: int, status: Optional[str] = None, db: Session = Depends(get_db)):
+    """Return majlis bills with outstanding cash (SHORT or ADVANCE)."""
+    q = db.query(MajlisBill).filter(
+        MajlisBill.trust_id == trust_id,
+        MajlisBill.cash_status.in_(["SHORT", "ADVANCE"]),
+    )
+    if status and status in ("SHORT", "ADVANCE"):
+        q = q.filter(MajlisBill.cash_status == status)
+    return [_serialize(b) for b in q.order_by(MajlisBill.date.desc()).all()]
+
+
+class CollectBody(BaseModel):
+    cash_received: float
+
+
+@router.patch("/{bill_id}/collect")
+def collect_bill(bill_id: int, body: CollectBody, db: Session = Depends(get_db)):
+    """Update cash_received on a bill without re-issuing journal entries."""
+    bill = db.query(MajlisBill).filter(MajlisBill.id == bill_id).first()
+    if not bill:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    new_total = (bill.cash_received or 0.0) + body.cash_received
+    bill.cash_received = min(new_total, bill.total_amount or new_total)
+    bill.cash_status = _cash_status(bill.cash_received, bill.total_amount or 0.0)
+    db.commit()
+    db.refresh(bill)
     return _serialize(bill)
 
 

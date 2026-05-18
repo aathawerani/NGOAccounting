@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, BookOpen, AlertCircle, ChevronDown, ChevronUp, Pencil, X } from "lucide-react";
+import { Trash2, BookOpen, AlertCircle, ChevronDown, ChevronUp, Pencil, X, AlertTriangle } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -16,9 +16,18 @@ const HIJRI_MONTHS = [
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
+const CASH_STATUS_STYLE = {
+  PAID:    "bg-emerald-100 text-emerald-700",
+  SHORT:   "bg-amber-100 text-amber-700",
+  ADVANCE: "bg-gray-100 text-gray-500",
+  NIL:     "bg-gray-100 text-gray-500",
+};
+
 const EMPTY = {
   date: TODAY,
   debitAccount: "CASH",
+  cashReceived: "",
+  noCash: false,
   hijri_day: "",
   hijri_month: "",
   hijri_year: "",
@@ -139,6 +148,7 @@ export default function MajlisBillsPage() {
   const [bills, setBills] = useState([]);
   const [nextSerial, setNextSerial] = useState("001");
   const [cashAccounts, setCashAccounts] = useState([]);
+  const [outstandingBills, setOutstandingBills] = useState([]);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [toasts, setToasts] = useState([]);
@@ -185,16 +195,31 @@ export default function MajlisBillsPage() {
     } catch { /* silent */ }
   }, [selectedTrust]);
 
+  const fetchOutstanding = useCallback(async () => {
+    if (!selectedTrust) return;
+    try {
+      const res = await fetch(`${API}/api/majlis/receivables?trust_id=${selectedTrust.id}`);
+      if (res.ok) setOutstandingBills(await res.json());
+    } catch { /* silent */ }
+  }, [selectedTrust]);
+
   useEffect(() => {
     fetchBills();
     fetchSerial();
     fetchCashAccounts();
-  }, [fetchBills, fetchSerial, fetchCashAccounts]);
+    fetchOutstanding();
+  }, [fetchBills, fetchSerial, fetchCashAccounts, fetchOutstanding]);
 
   function startEdit(b) {
+    const isNoCash = b.cash_status === "ADVANCE" || b.cash_received === 0;
     setForm({
       date: b.date,
       debitAccount: cashAccounts[0]?.account_code ?? "CASH",
+      cashReceived: isNoCash ? "" : (
+        b.cash_received != null && b.cash_received !== b.total_amount
+          ? String(b.cash_received) : ""
+      ),
+      noCash: isNoCash,
       hijri_day: b.hijri_day || "",
       hijri_month: b.hijri_month || "",
       hijri_year: b.hijri_year || "",
@@ -233,10 +258,15 @@ export default function MajlisBillsPage() {
     e.preventDefault();
     if (!selectedTrust) return;
     setSubmitting(true);
+    const actualCashReceived = form.noCash
+      ? 0
+      : (form.cashReceived !== "" ? parseFloat(form.cashReceived) : total);
+
     const payload = {
       trust_id: selectedTrust.id,
       date: form.date,
       debit_account_code: form.debitAccount || "CASH",
+      cash_received: actualCashReceived,
       hijri_day: form.hijri_day || null,
       hijri_month: form.hijri_month || null,
       hijri_year: form.hijri_year || null,
@@ -358,6 +388,24 @@ export default function MajlisBillsPage() {
 
         {(showForm || editingId) && (
           <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            {/* Outstanding bills alert */}
+            {!editingId && outstandingBills.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="font-semibold text-amber-800">
+                    {outstandingBills.length} outstanding bill(s) — total due: {PKR(outstandingBills.reduce((s, b) => s + (b.shortfall ?? 0), 0))}
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5 text-xs text-amber-700">
+                    {outstandingBills.slice(0, 5).map(b => (
+                      <li key={b.id}>#{b.serial_no} {b.event_name ? `— ${b.event_name}` : ""} — Balance: {PKR(b.shortfall)} ({b.cash_status})</li>
+                    ))}
+                    {outstandingBills.length > 5 && <li>…and {outstandingBills.length - 5} more</li>}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             {/* Date + Event + Time + Debit Account */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <Field label="Date *">
@@ -510,6 +558,44 @@ export default function MajlisBillsPage() {
                 </div>
               )}
 
+              {/* Cash Received */}
+              {total > 0 && (() => {
+                const actualCash = form.noCash ? 0 : (form.cashReceived !== "" ? parseFloat(form.cashReceived) || 0 : total);
+                const shortfall  = Math.max(0, total - actualCash);
+                const status     = actualCash <= 0 ? "ADVANCE" : actualCash >= total ? "PAID" : "SHORT";
+                return (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Cash Received (PKR)</label>
+                        <input
+                          type="number" min="0" step="0.01"
+                          value={form.noCash ? "" : form.cashReceived}
+                          placeholder={form.noCash ? "0 — no cash" : String(total)}
+                          disabled={form.noCash}
+                          onChange={e => setForm(f => ({ ...f, cashReceived: e.target.value }))}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 mt-5 cursor-pointer select-none">
+                        <input type="checkbox" checked={form.noCash}
+                          onChange={e => setForm(f => ({ ...f, noCash: e.target.checked, cashReceived: "" }))}
+                          className="w-4 h-4 rounded accent-amber-500" />
+                        <span className="text-sm text-gray-700 whitespace-nowrap">No cash received</span>
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-6 text-sm">
+                      <div><span className="text-xs text-gray-500 block">Total</span><span className="font-semibold">{PKR(total)}</span></div>
+                      <div><span className="text-xs text-gray-500 block">Cash Received</span><span className={cn("font-semibold", actualCash < total ? "text-amber-600" : "text-emerald-700")}>{PKR(actualCash)}</span></div>
+                      <div><span className="text-xs text-gray-500 block">Balance Due</span><span className={cn("font-semibold", shortfall > 0 ? "text-red-600" : "text-gray-400")}>{shortfall > 0 ? PKR(shortfall) : "—"}</span></div>
+                      <div><span className="text-xs text-gray-500 block">Status</span>
+                        <span className={cn("inline-block px-2 py-0.5 rounded-full text-xs font-semibold", CASH_STATUS_STYLE[status])}>{status}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="flex items-center justify-between">
                 <div>
                   <span className="text-xs text-gray-500">Total Bill</span>
@@ -564,6 +650,8 @@ export default function MajlisBillsPage() {
                 <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Sugar</th>
                 <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Tea</th>
                 <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Total</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Cash Recv</th>
+                <th className="px-4 py-3 text-right font-medium text-gray-600 whitespace-nowrap">Balance</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -571,14 +659,14 @@ export default function MajlisBillsPage() {
               {loading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i} className="animate-pulse">
-                    {Array.from({ length: 10 }).map((__, j) => (
+                    {Array.from({ length: 12 }).map((__, j) => (
                       <td key={j} className="px-4 py-3"><div className="h-4 bg-gray-200 rounded" /></td>
                     ))}
                   </tr>
                 ))
               ) : bills.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-12 text-center text-gray-400">
+                  <td colSpan={12} className="px-6 py-12 text-center text-gray-400">
                     <BookOpen className="w-10 h-10 mx-auto mb-3 opacity-30" />
                     <p className="font-medium">No bills recorded yet</p>
                   </td>
@@ -602,6 +690,19 @@ export default function MajlisBillsPage() {
                     <td className="px-4 py-3 text-right text-gray-600">{b.sugar_total ? PKR(b.sugar_total) : "—"}</td>
                     <td className="px-4 py-3 text-right text-gray-600">{b.tea_total ? PKR(b.tea_total) : "—"}</td>
                     <td className="px-4 py-3 text-right font-semibold text-emerald-700">{PKR(b.total_amount)}</td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex flex-col items-end gap-0.5">
+                        <span className="font-medium text-gray-700">{PKR(b.cash_received ?? b.total_amount)}</span>
+                        <span className={cn("inline-block px-1.5 py-0.5 rounded-full text-xs font-semibold", CASH_STATUS_STYLE[b.cash_status || "PAID"])}>
+                          {b.cash_status || "PAID"}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {(b.shortfall ?? 0) > 0
+                        ? <span className="font-medium text-red-600">{PKR(b.shortfall)}</span>
+                        : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button

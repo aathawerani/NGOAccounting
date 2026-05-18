@@ -16,6 +16,7 @@ import ExportReportsPage from "./pages/ExportReportsPage";
 import ReportsPage from "./pages/ReportsPage";
 import FiscalYearClosePage from "./pages/FiscalYearClosePage";
 import AuditLogPage from "./pages/AuditLogPage";
+import CashReceivablesPage from "./pages/CashReceivablesPage";
 
 const PAGE_LABELS = {
   dashboard: "Dashboard",
@@ -32,6 +33,7 @@ const PAGE_LABELS = {
   "financial-reports": "Financial Reports",
   "fiscal-year-close": "Fiscal Year Close",
   "audit-log": "Audit Log",
+  "cash-receivables": "Cash Receivables",
 };
 
 function PageRouter({ activePage, onNavigate }) {
@@ -64,6 +66,8 @@ function PageRouter({ activePage, onNavigate }) {
       return <FiscalYearClosePage />;
     case "audit-log":
       return <AuditLogPage />;
+    case "cash-receivables":
+      return <CashReceivablesPage />;
     default:
       return <PlaceholderPage title={PAGE_LABELS[activePage] ?? "Dashboard"} />;
   }

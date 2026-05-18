@@ -74,6 +74,8 @@ class RentReceipt(Base):
     total_rent = Column(Float, default=0.0)
     total_water = Column(Float, default=0.0)
     total_amount = Column(Float, default=0.0)
+    cash_received = Column(Float)               # actual cash collected (None → backfilled to total)
+    cash_status   = Column(String, default="PAID")  # PAID | SHORT | ADVANCE | NIL
     # WPF-format particulars strings stored for audit / re-print
     rent_particulars = Column(String)
     water_particulars = Column(String)
@@ -184,6 +186,8 @@ class MajlisBill(Base):
     loud_speaker = Column(Float, default=0.0)
     molana = Column(Float, default=0.0)
     total_amount = Column(Float, default=0.0)
+    cash_received = Column(Float)               # actual cash collected
+    cash_status   = Column(String, default="PAID")  # PAID | SHORT | ADVANCE | NIL
 
     trust = relationship("Trust")
 

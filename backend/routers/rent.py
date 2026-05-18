@@ -33,6 +33,7 @@ class RentReceiptBody(BaseModel):
     rent_arrears: float = 0.0
     water_arrears: float = 0.0
     debit_account_code: str = "CASH"   # which cash/bank account to debit
+    cash_received: Optional[float] = None   # None = fully paid (= total)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -40,6 +41,15 @@ class RentReceiptBody(BaseModel):
 def _fmt(d: date) -> str:
     """WPF particulars date format: d/m/yyyy (no zero-padding)."""
     return f"{d.day}/{d.month}/{d.year}"
+
+
+def _cash_status(cash_received: float, total: float) -> str:
+    if cash_received <= 0:
+        return "ADVANCE"
+    elif cash_received >= total:
+        return "PAID"
+    else:
+        return "SHORT"
 
 
 def _num_months(from_m: int, from_y: int, to_m: int, to_y: int) -> int:
@@ -90,6 +100,9 @@ def _serialize(r: RentReceipt) -> dict:
         "water_particulars": r.water_particulars,
         "arrears_particulars": r.arrears_particulars,
         "water_arrears_particulars": r.water_arrears_particulars,
+        "cash_received": r.cash_received,
+        "cash_status": r.cash_status or "PAID",
+        "shortfall": round(max(0.0, (r.total_amount or 0.0) - (r.cash_received or 0.0)), 2),
     }
 
 
@@ -287,6 +300,8 @@ def create_receipt(body: RentReceiptBody, db: Session = Depends(get_db)):
     arrears_part = f"{space}, RENT AREARS"
     water_arrears_part = f"{space}, WATER AREARS"
 
+    cash_recv = body.cash_received if body.cash_received is not None else total_amount
+
     receipt = RentReceipt(
         trust_id=body.trust_id,
         tenant_id=body.tenant_id,
@@ -306,6 +321,8 @@ def create_receipt(body: RentReceiptBody, db: Session = Depends(get_db)):
         total_rent=total_rent,
         total_water=total_water,
         total_amount=total_amount,
+        cash_received=cash_recv,
+        cash_status=_cash_status(cash_recv, total_amount),
         rent_particulars=rent_part,
         water_particulars=water_part,
         arrears_particulars=arrears_part,
@@ -373,6 +390,10 @@ def update_receipt(receipt_id: int, body: RentReceiptBody, db: Session = Depends
     receipt.water_particulars = f"{space}, WATER @{int(tenant.water_charge)}, {_fmt(from_date)}-{_fmt(to_date)}"
     receipt.arrears_particulars = f"{space}, RENT AREARS"
     receipt.water_arrears_particulars = f"{space}, WATER AREARS"
+
+    cash_recv = body.cash_received if body.cash_received is not None else total_amount
+    receipt.cash_received = cash_recv
+    receipt.cash_status = _cash_status(cash_recv, total_amount)
 
     db.commit()
     _recalc_last_paid(body.tenant_id, db)
@@ -442,6 +463,51 @@ def delete_receipt(receipt_id: int, db: Session = Depends(get_db)):
     db.commit()
     if tenant_id:
         _recalc_last_paid(tenant_id, db)
+
+
+@router.get("/tenant/{tenant_id}/receivables")
+def tenant_receivables(tenant_id: int, db: Session = Depends(get_db)):
+    """Return outstanding (SHORT/ADVANCE) receipts for a specific tenant."""
+    receipts = (
+        db.query(RentReceipt)
+        .filter(
+            RentReceipt.tenant_id == tenant_id,
+            RentReceipt.cash_status.in_(["SHORT", "ADVANCE"]),
+        )
+        .order_by(RentReceipt.date.desc())
+        .all()
+    )
+    return [_serialize(r) for r in receipts]
+
+
+@router.get("/receivables")
+def list_receivables(trust_id: int, status: Optional[str] = None, db: Session = Depends(get_db)):
+    """Return rent receipts with outstanding cash (SHORT or ADVANCE)."""
+    q = db.query(RentReceipt).filter(
+        RentReceipt.trust_id == trust_id,
+        RentReceipt.cash_status.in_(["SHORT", "ADVANCE"]),
+    )
+    if status and status in ("SHORT", "ADVANCE"):
+        q = q.filter(RentReceipt.cash_status == status)
+    return [_serialize(r) for r in q.order_by(RentReceipt.date.desc()).all()]
+
+
+class CollectBody(BaseModel):
+    cash_received: float
+
+
+@router.patch("/{receipt_id}/collect")
+def collect_receipt(receipt_id: int, body: CollectBody, db: Session = Depends(get_db)):
+    """Update cash_received on a receipt without re-issuing journal entries."""
+    receipt = db.query(RentReceipt).filter(RentReceipt.id == receipt_id).first()
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    new_total = (receipt.cash_received or 0.0) + body.cash_received
+    receipt.cash_received = min(new_total, receipt.total_amount or new_total)
+    receipt.cash_status = _cash_status(receipt.cash_received, receipt.total_amount or 0.0)
+    db.commit()
+    db.refresh(receipt)
+    return _serialize(receipt)
 
 
 @router.get("/receipt/{receipt_id}/print")

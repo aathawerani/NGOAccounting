@@ -46,8 +46,17 @@ function emptyForm() {
     rentArrears: "",
     waterArrears: "",
     debitAccount: "CASH",
+    cashReceived: "",   // "" means "same as total" (fully paid)
+    noCash: false,
   };
 }
+
+const CASH_STATUS_STYLE = {
+  PAID:    "bg-emerald-100 text-emerald-700",
+  SHORT:   "bg-amber-100 text-amber-700",
+  ADVANCE: "bg-gray-100 text-gray-500",
+  NIL:     "bg-gray-100 text-gray-500",
+};
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function Toast({ toasts }) {
@@ -90,7 +99,7 @@ function ConfirmDialog({ receipt, onConfirm, onCancel }) {
 function SkeletonRow() {
   return (
     <tr className="animate-pulse">
-      {Array.from({ length: 10 }).map((_, i) => (
+      {Array.from({ length: 11 }).map((_, i) => (
         <td key={i} className="px-4 py-3"><div className="h-4 bg-gray-200 rounded" /></td>
       ))}
     </tr>
@@ -114,6 +123,7 @@ export default function RentEntryPage() {
 
   const [form, setForm] = useState(emptyForm());
   const editing = editTarget !== null;
+  const [tenantReceivables, setTenantReceivables] = useState([]);
 
   // ── Imported ledger receipts state ────────────────────────────────────────
   const [ledgerReceipts, setLedgerReceipts] = useState([]);
@@ -200,6 +210,14 @@ export default function RentEntryPage() {
     fetchCashAccounts();
   }, [fetchTenants, fetchReceipts, fetchNextSerial, fetchLedgerReceipts, fetchCashAccounts]);
 
+  useEffect(() => {
+    if (!form.tenantId) { setTenantReceivables([]); return; }
+    fetch(`${API}/api/rent/tenant/${form.tenantId}/receivables`)
+      .then(r => r.ok ? r.json() : [])
+      .then(setTenantReceivables)
+      .catch(() => setTenantReceivables([]));
+  }, [form.tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Calculations ─────────────────────────────────────────────────────────────
   const n = form.tenantId
     ? numMonths(form.fromMonth, form.fromYear, form.toMonth, form.toYear)
@@ -216,6 +234,7 @@ export default function RentEntryPage() {
     if (!receipt.from_date || !receipt.to_date) return;
     const f = new Date(receipt.from_date);
     const t = new Date(receipt.to_date);
+    const isNoCash = receipt.cash_status === "ADVANCE" || receipt.cash_received === 0;
     setEditTarget(receipt);
     setForm({
       tenantId: String(receipt.tenant_id ?? ""),
@@ -226,6 +245,12 @@ export default function RentEntryPage() {
       toYear: t.getFullYear(),
       rentArrears: receipt.rent_arrears ? String(receipt.rent_arrears) : "",
       waterArrears: receipt.water_arrears ? String(receipt.water_arrears) : "",
+      debitAccount: receipt.debit_account_code ?? "CASH",
+      cashReceived: isNoCash ? "" : (
+        receipt.cash_received != null && receipt.cash_received !== receipt.total_amount
+          ? String(receipt.cash_received) : ""
+      ),
+      noCash: isNoCash,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -242,6 +267,10 @@ export default function RentEntryPage() {
     if (!validRange) return addToast("From date must be before or equal to To date", "error");
 
     setSubmitting(true);
+    const actualCashReceived = form.noCash
+      ? 0
+      : (form.cashReceived !== "" ? parseFloat(form.cashReceived) : grandTotal);
+
     const payload = {
       trust_id: selectedTrust.id,
       tenant_id: Number(form.tenantId),
@@ -253,6 +282,7 @@ export default function RentEntryPage() {
       rent_arrears: arrR,
       water_arrears: arrW,
       debit_account_code: form.debitAccount || "CASH",
+      cash_received: actualCashReceived,
     };
 
     try {
@@ -387,6 +417,23 @@ export default function RentEntryPage() {
             </div>
           )}
 
+          {/* Outstanding balance alert */}
+          {tenantReceivables.length > 0 && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="font-semibold text-amber-800">
+                  Outstanding balance: {PKR(tenantReceivables.reduce((s, r) => s + (r.shortfall ?? 0), 0))} across {tenantReceivables.length} receipt(s)
+                </p>
+                <ul className="mt-1.5 space-y-0.5 text-xs text-amber-700">
+                  {tenantReceivables.map(r => (
+                    <li key={r.id}>#{r.serial_no} — {fmtDate(r.date)} — Balance: {PKR(r.shortfall)} ({r.cash_status})</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
           {/* Period */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -448,6 +495,50 @@ export default function RentEntryPage() {
               )}
             </div>
           )}
+
+          {/* Cash Received */}
+          {form.tenantId && validRange && (() => {
+            const actualCash = form.noCash ? 0 : (form.cashReceived !== "" ? parseFloat(form.cashReceived) || 0 : grandTotal);
+            const shortfall  = Math.max(0, grandTotal - actualCash);
+            return (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Cash Received (PKR)</label>
+                    <input
+                      type="number" min="0" step="0.01"
+                      value={form.noCash ? "" : form.cashReceived}
+                      placeholder={form.noCash ? "0 — no cash" : String(grandTotal)}
+                      disabled={form.noCash}
+                      onChange={e => setForm(f => ({ ...f, cashReceived: e.target.value }))}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 mt-5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={form.noCash}
+                      onChange={e => setForm(f => ({ ...f, noCash: e.target.checked, cashReceived: "" }))}
+                      className="w-4 h-4 rounded accent-amber-500"
+                    />
+                    <span className="text-sm text-gray-700 whitespace-nowrap">No cash received</span>
+                  </label>
+                </div>
+                <div className="flex items-center gap-6 text-sm">
+                  <div><span className="text-xs text-gray-500 block">Total</span><span className="font-semibold">{PKR(grandTotal)}</span></div>
+                  <div><span className="text-xs text-gray-500 block">Cash Received</span><span className={cn("font-semibold", actualCash < grandTotal ? "text-amber-600" : "text-emerald-700")}>{PKR(actualCash)}</span></div>
+                  <div><span className="text-xs text-gray-500 block">Balance Due</span><span className={cn("font-semibold", shortfall > 0 ? "text-red-600" : "text-gray-400")}>{shortfall > 0 ? PKR(shortfall) : "—"}</span></div>
+                  <div><span className="text-xs text-gray-500 block">Status</span>
+                    <span className={cn("inline-block px-2 py-0.5 rounded-full text-xs font-semibold", CASH_STATUS_STYLE[
+                      actualCash <= 0 ? "ADVANCE" : actualCash >= grandTotal ? "PAID" : "SHORT"
+                    ])}>
+                      {actualCash <= 0 ? "ADVANCE" : actualCash >= grandTotal ? "PAID" : "SHORT"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           <div className="flex justify-end gap-3">
             {editing && (
@@ -619,8 +710,8 @@ export default function RentEntryPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                {["#","Date","Tenant","Space","Period","Rent","Water","Arrears","Total",""].map((h, i) => (
-                  <th key={i} className={cn("px-4 py-3 font-medium text-gray-600 whitespace-nowrap", i >= 5 ? "text-right" : "text-left")}>{h}</th>
+                {["#","Date","Tenant","Space","Period","Rent+Water","Arrears","Total","Cash Recv","Balance",""].map((h, i) => (
+                  <th key={i} className={cn("px-4 py-3 font-medium text-gray-600 whitespace-nowrap text-xs", i >= 5 ? "text-right" : "text-left")}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -629,49 +720,67 @@ export default function RentEntryPage() {
                 Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} />)
               ) : receipts.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-6 py-12 text-center text-gray-400">
+                  <td colSpan={11} className="px-6 py-12 text-center text-gray-400">
                     <Receipt className="w-10 h-10 mx-auto mb-3 opacity-30" />
                     <p className="font-medium">No receipts recorded yet</p>
                   </td>
                 </tr>
               ) : (
-                receipts.map((r) => (
-                  <tr key={r.id} className={cn("hover:bg-gray-50 transition-colors", editTarget?.id === r.id && "bg-amber-50")}>
-                    <td className="px-4 py-3 font-mono text-gray-500">{r.serial_no}</td>
-                    <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{fmtDate(r.date)}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{r.tenant_name}</td>
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{r.space_type} {r.space_number}</td>
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{fmtPeriod(r)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{PKR(r.total_rent)}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{PKR(r.total_water)}</td>
-                    <td className="px-4 py-3 text-right text-gray-600">
-                      {(r.rent_arrears || r.water_arrears)
-                        ? PKR((r.rent_arrears ?? 0) + (r.water_arrears ?? 0))
-                        : <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-700">{PKR(r.total_amount)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <a href={`${API}/api/rent/receipt/${r.id}/pdf`} target="_blank" rel="noopener noreferrer"
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors" title="Print PDF receipt">
-                          <Printer className="w-4 h-4" />
-                        </a>
-                        <a href={`${API}/api/rent/receipt/${r.id}/print`} download
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Download receipt (.docx)">
-                          <FileDown className="w-4 h-4" />
-                        </a>
-                        <button onClick={() => startEdit(r)}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit">
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => setDeleteTarget(r)}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                receipts.map((r) => {
+                  const shortfall = r.shortfall ?? Math.max(0, (r.total_amount ?? 0) - (r.cash_received ?? r.total_amount ?? 0));
+                  const status    = r.cash_status ?? "PAID";
+                  return (
+                    <tr key={r.id} className={cn("hover:bg-gray-50 transition-colors", editTarget?.id === r.id && "bg-amber-50")}>
+                      <td className="px-4 py-3 font-mono text-gray-500 text-xs">{r.serial_no}</td>
+                      <td className="px-4 py-3 text-gray-700 whitespace-nowrap text-xs">{fmtDate(r.date)}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900 text-sm">{r.tenant_name}</td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">{r.space_type} {r.space_number}</td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">{fmtPeriod(r)}</td>
+                      <td className="px-4 py-3 text-right text-gray-700 text-xs">{PKR((r.total_rent ?? 0) + (r.total_water ?? 0))}</td>
+                      <td className="px-4 py-3 text-right text-gray-600 text-xs">
+                        {(r.rent_arrears || r.water_arrears)
+                          ? PKR((r.rent_arrears ?? 0) + (r.water_arrears ?? 0))
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-emerald-700 text-sm">{PKR(r.total_amount)}</td>
+                      <td className="px-4 py-3 text-right text-sm">
+                        <div className="flex flex-col items-end gap-0.5">
+                          <span className={cn("font-semibold", status !== "PAID" ? "text-amber-600" : "text-emerald-700")}>
+                            {PKR(r.cash_received ?? r.total_amount)}
+                          </span>
+                          <span className={cn("text-xs px-1.5 py-0.5 rounded-full font-medium", CASH_STATUS_STYLE[status] ?? CASH_STATUS_STYLE.PAID)}>
+                            {status}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right text-sm">
+                        {shortfall > 0
+                          ? <span className="font-semibold text-red-600">{PKR(shortfall)}</span>
+                          : <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <a href={`${API}/api/rent/receipt/${r.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors" title="Print PDF receipt">
+                            <Printer className="w-4 h-4" />
+                          </a>
+                          <a href={`${API}/api/rent/receipt/${r.id}/print`} download
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Download receipt (.docx)">
+                            <FileDown className="w-4 h-4" />
+                          </a>
+                          <button onClick={() => startEdit(r)}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit">
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => setDeleteTarget(r)}
+                            className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

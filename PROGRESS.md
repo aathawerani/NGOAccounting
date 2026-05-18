@@ -47,6 +47,7 @@
 | Edit receipt | ✅ Done | |
 | Delete receipt | ✅ Done | |
 | Last paid tracking | ✅ Done | Updates tenant.last_paid_month/year |
+| Cash received tracking (TASK-030) | ✅ Done | cash_received + cash_status (PAID/SHORT/ADVANCE); form input + "No cash received" checkbox; history table: Cash Recv + Balance columns; DB migration with backfill |
 
 ### Cash Position (CashPositionPage)
 | Feature | Status | Notes |
@@ -55,6 +56,7 @@
 | Total liquid assets card | ✅ Done | |
 | Recent transactions table | ✅ Done | Last 25, sorted by date desc |
 | Running balance per row | ✅ Done | |
+| Physical Cash / Receivables / On-Account / Book Income cards (TASK-034) | ✅ Done | New `/api/cash-position` endpoint; source breakdown table; all-trusts side-by-side panel |
 
 ### Journal Entries (JournalEntriesPage)
 | Feature | Status | Notes |
@@ -103,6 +105,7 @@
 | Edit bill | ✅ Done | Pencil button pre-fills form; PUT /api/majlis/{id} re-issues journal entries |
 | Delete bill | ✅ Done | Also removes associated journal entries (majl-/lchg- keys) |
 | Backend PUT endpoint | ✅ Done | `/api/majlis/{id}` update with recalculated totals |
+| Cash received tracking (TASK-031) | ✅ Done | cash_received + cash_status (PAID/SHORT/ADVANCE); form input + "No cash received" checkbox; history table shows Cash Recv + Balance columns; DB migration with backfill |
 
 ### Dashboard (DashboardPage) — NEW
 | Feature | Status | Notes |
@@ -357,6 +360,42 @@
 **TASK-014: Round-Trip Re-import Test**
 - Verified HTTT export → re-import: 413 transactions, 0 would-insert, 0 would-flag — lossless
 - Note: DEP account sheet is skipped by `_SKIP` list (added per urgent fix); its 0 entries still round-trip correctly (no entries are in DEP in the original data)
+
+---
+
+### Session 2026-05-17 (continued 2) — TASK-032 through TASK-034
+
+**TASK-032: Cash Receivables page**
+- `routers/rent.py`: Added `GET /tenant/{id}/receivables`, `GET /receivables`, `PATCH /{id}/collect`
+- `routers/majlis.py`: Added `GET /receivables`, `PATCH /{id}/collect`
+- `CashReceivablesPage.jsx` (NEW): Two tabs (Rent / Majlis), filter ALL/SHORT/ADVANCE, summary cards, Collect modal, refreshes item list after collection
+- `App.jsx`, `Sidebar.jsx`: Wired "Cash Receivables" route under Reports section
+
+**TASK-033: Outstanding balance alert on entry forms**
+- `routers/rent.py`: Added `GET /tenant/{id}/receivables` (returns SHORT/ADVANCE receipts for one tenant)
+- `RentEntryPage.jsx`: Fetches receivables on tenant change; shows amber alert with per-receipt breakdown if any outstanding
+- `MajlisBillsPage.jsx`: Fetches trust-wide majlis receivables on load; shows amber alert in form when opening new bill if any outstanding bills exist
+
+**TASK-034: Cash Position overhaul**
+- `routers/cash_position.py` (NEW): `GET /api/cash-position?trust_id=X` (physical cash, receivables, on-account, book income, receivables breakdown); `GET /api/cash-position/all-trusts`
+- `main.py`: Registered cash_position router
+- `CashPositionPage.jsx`: Rewrote — 4 summary cards (Physical Cash/Receivables/On-Account/Book Income), cash accounts list, receivables breakdown table, all-trusts 3-column panel, recent transactions
+- Frontend build: ✅ clean (487 kB JS, 1.06s)
+
+---
+
+### Session 2026-05-17 (continued) — TASK-030 + TASK-031
+
+**TASK-030: Cash received on Rent Receipt**
+- `models/models.py`: Added `cash_received` (Float nullable) + `cash_status` (String, default PAID) to `RentReceipt`
+- `main.py`: Added migration block for `rent_receipts`; backfills `cash_received = total_amount` for existing rows
+- `routers/rent.py`: Added `cash_received: Optional[float] = None` to body; added `_cash_status()` helper; `_serialize()` returns `cash_received`, `cash_status`, `shortfall`; `create_receipt` + `update_receipt` compute and store cash fields
+- `RentEntryPage.jsx`: Added `cashReceived`/`noCash` form state; Cash Received input + "No cash received" checkbox with live Total/Cash/Balance/Status preview; history table extended to 11 columns (merged Rent+Water, added Cash Recv + Balance)
+
+**TASK-031: Cash received on Majlis Bill**
+- `routers/majlis.py`: Same pattern — `_cash_status()` helper, updated `_serialize()`, `create_bill`, `update_bill`
+- `MajlisBillsPage.jsx`: Added `cashReceived`/`noCash` form state; Cash Received input + checkbox; history table extended to 12 columns (added Cash Recv + Balance)
+- Frontend build: ✅ clean (469 kB JS, 1.38s)
 
 ---
 

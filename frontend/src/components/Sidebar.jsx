@@ -56,6 +56,7 @@ const NAV_SECTIONS = [
     children: [
       { id: "cash-position", label: "Cash Position" },
       { id: "receivables", label: "Receivables" },
+      { id: "cash-receivables", label: "Cash Receivables" },
       { id: "financial-reports", label: "Financial Reports" },
     ],
   },

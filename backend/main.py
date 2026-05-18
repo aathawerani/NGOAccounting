@@ -25,6 +25,7 @@ from routers import backup as backup_router
 from routers import fiscal_year as fiscal_year_router
 from routers import search as search_router
 from routers import audit_log as audit_log_router
+from routers import cash_position as cash_position_router
 
 
 @asynccontextmanager
@@ -64,6 +65,7 @@ app.include_router(backup_router.router)
 app.include_router(fiscal_year_router.router)
 app.include_router(search_router.router)
 app.include_router(audit_log_router.router)
+app.include_router(cash_position_router.router)
 
 
 # ── Migrations ───────────────────────────────────────────────────────────────
@@ -106,6 +108,42 @@ def _run_migrations():
         if v_stmts:
             conn.commit()
             print(f"DB migration: applied {len(v_stmts)} column addition(s) to vouchers")
+
+        # rent_receipts — cash tracking columns
+        cursor.execute("PRAGMA table_info(rent_receipts)")
+        rr_existing = {row[1] for row in cursor.fetchall()}
+        rr_stmts = []
+        if "cash_received" not in rr_existing:
+            rr_stmts.append("ALTER TABLE rent_receipts ADD COLUMN cash_received REAL")
+        if "cash_status" not in rr_existing:
+            rr_stmts.append("ALTER TABLE rent_receipts ADD COLUMN cash_status TEXT DEFAULT 'PAID'")
+        for s in rr_stmts:
+            cursor.execute(s)
+        if rr_stmts:
+            conn.commit()
+            cursor.execute(
+                "UPDATE rent_receipts SET cash_received = total_amount WHERE cash_received IS NULL"
+            )
+            conn.commit()
+            print(f"DB migration: applied {len(rr_stmts)} column(s) to rent_receipts, backfilled cash_received")
+
+        # majlis_bills — cash tracking columns
+        cursor.execute("PRAGMA table_info(majlis_bills)")
+        mb_existing = {row[1] for row in cursor.fetchall()}
+        mb_stmts = []
+        if "cash_received" not in mb_existing:
+            mb_stmts.append("ALTER TABLE majlis_bills ADD COLUMN cash_received REAL")
+        if "cash_status" not in mb_existing:
+            mb_stmts.append("ALTER TABLE majlis_bills ADD COLUMN cash_status TEXT DEFAULT 'PAID'")
+        for s in mb_stmts:
+            cursor.execute(s)
+        if mb_stmts:
+            conn.commit()
+            cursor.execute(
+                "UPDATE majlis_bills SET cash_received = total_amount WHERE cash_received IS NULL"
+            )
+            conn.commit()
+            print(f"DB migration: applied {len(mb_stmts)} column(s) to majlis_bills, backfilled cash_received")
     finally:
         conn.close()
 

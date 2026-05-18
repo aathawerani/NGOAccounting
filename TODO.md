@@ -24,3 +24,8 @@
 - [x] TASK-022: Tenant ledger/statement — Statement sub-tab on Tenants page; month-by-month rent history; GET /api/tenants/{id}/statement; PDF export
 - [x] TASK-023: Investment maturity alerts — "Maturing Soon" card on Dashboard; GET /api/investments/maturing?days=60; red/orange/yellow colour coding; Renew button
 - [x] TASK-024: Audit log — AuditLog table; log every create/update/delete; GET /api/audit-log; new Audit Log page under Settings
+- [x] TASK-030: Cash received field on Rent Receipt — add cash_received + cash_status (PAID/SHORT/ADVANCE/NIL) to RentReceipt; form input + "No cash received" checkbox; receipt display shows Total | Cash Received | Balance Due; DB migration
+- [x] TASK-031: Cash received field on Majlis Bill — identical logic to TASK-030 for MajlisBill; cash_received + cash_status; form input + checkbox; DB migration
+- [x] TASK-032: Receivables screen per trust — new Receivables page with Rent + Majlis tabs; grouped by tenant/event; Collect modal per receipt; summary cards; filter SHORT/ADVANCE
+- [x] TASK-033: Receivables alert on rent entry form — amber warning showing outstanding balance when opening form for a tenant with SHORT/ADVANCE receipts; same for Majlis
+- [x] TASK-034: Cash Position overhaul — Physical Cash / Total Receivables / On-Account / Book Income cards; source breakdown table; all-trusts side-by-side panel
