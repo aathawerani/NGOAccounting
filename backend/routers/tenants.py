@@ -170,6 +170,73 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
+@router.get("/{tenant_id}/payment-history")
+def payment_history(
+    tenant_id: int,
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """12-month payment status grid for a tenant."""
+    from datetime import date as _date
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+
+    yr = year or _date.today().year
+    months_data = []
+    total_billed = total_collected = total_outstanding = 0.0
+
+    for m in range(1, 13):
+        start = _date(yr, m, 1)
+        end_day = calendar.monthrange(yr, m)[1]
+        end = _date(yr, m, end_day)
+
+        receipts = db.query(RentReceipt).filter(
+            RentReceipt.tenant_id == tenant_id,
+            RentReceipt.date >= start,
+            RentReceipt.date <= end,
+        ).all()
+
+        billed = sum(r.total_amount or 0.0 for r in receipts)
+        collected = sum(r.cash_received or 0.0 for r in receipts)
+        shortfall = max(0.0, billed - collected)
+
+        if not receipts:
+            status = "NONE"
+        elif all((r.cash_status or "PAID").upper() == "PAID" for r in receipts):
+            status = "PAID"
+        elif any((r.cash_status or "PAID").upper() == "SHORT" for r in receipts):
+            status = "SHORT"
+        else:
+            status = "ADVANCE"
+
+        total_billed += billed
+        total_collected += collected
+        total_outstanding += shortfall
+
+        months_data.append({
+            "month_num": m,
+            "month_name": MONTHS[m - 1],
+            "status": status,
+            "billed": round(billed, 2),
+            "collected": round(collected, 2),
+            "shortfall": round(shortfall, 2),
+            "receipts_count": len(receipts),
+        })
+
+    return {
+        "year": yr,
+        "tenant_id": tenant_id,
+        "tenant_name": tenant.name,
+        "months": months_data,
+        "totals": {
+            "billed": round(total_billed, 2),
+            "collected": round(total_collected, 2),
+            "outstanding": round(total_outstanding, 2),
+        },
+    }
+
+
 @router.get("/{tenant_id}/statement")
 def tenant_statement(
     tenant_id: int,

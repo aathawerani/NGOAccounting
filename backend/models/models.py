@@ -265,3 +265,18 @@ class AuditLog(Base):
     action = Column(String, nullable=False)     # create | update | delete
     description = Column(Text)
     timestamp = Column(DateTime, nullable=False, default=_dt_now.utcnow)
+
+
+class TrustSettings(Base):
+    """Per-trust configurable settings: address, default water charge, logo."""
+    __tablename__ = "trust_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trust_id = Column(Integer, ForeignKey("trusts.id"), nullable=False, unique=True)
+    address = Column(Text)
+    default_water_charge = Column(Float, default=0.0)
+    fiscal_year = Column(Integer)
+    logo_base64 = Column(Text)   # data-URI or raw base64 PNG/JPEG
+    updated_at = Column(DateTime)
+
+    trust = relationship("Trust")

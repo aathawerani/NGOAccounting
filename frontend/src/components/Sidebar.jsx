@@ -76,6 +76,7 @@ const NAV_SECTIONS = [
     icon: ShieldCheck,
     children: [
       { id: "audit-log", label: "Audit Log" },
+      { id: "trust-settings", label: "Trust Settings" },
     ],
   },
 ];

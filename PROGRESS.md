@@ -144,9 +144,11 @@
 | Trial Balance tab | ✅ Done | All accounts, DR/CR/balance, CSV download |
 | Income Statement tab | ✅ Done | INCOME vs EXPENSE, net surplus/deficit |
 | Balance Sheet tab | ✅ Done | Two-column ASSETS vs LIAB+EQUITY, net profit row, balance check alert |
+| Monthly Cash tab (TASK-037) | ✅ Done | 9-column table: Rent/Majlis Billed/Collected/Outstanding + Total Cash In + Cumulative; Export Excel |
 | Fiscal year filter | ✅ Done | Year dropdown (2020–current) or "All Periods" |
 | Backend endpoints | ✅ Done | `/api/reports/trial-balance`, `/api/reports/income-statement`, `/api/reports/balance-sheet` |
 | PDF export | ✅ Done | POST `/api/reports/pdf` — A4 reportlab PDF, opens inline in new tab |
+| Daily Summary (TASK-039) | ✅ Done | `GET /api/reports/daily-summary` + PDF; Dashboard "End of Day" modal |
 
 ### PDF Printing (TASK-020)
 | Feature | Status | Notes |
@@ -432,6 +434,38 @@
 
 **Frontend build: ✅ clean (462 kB JS, 37 kB CSS, 1.56s)**
 
+### Session 2026-05-24 — TASK-035 through TASK-039
+
+**TASK-035: Collect modal improvements**
+- `CashReceivablesPage.jsx`: Complete rewrite with grouped table (group header rows per tenant/event in amber)
+- Array-based toast system (`toasts` state) — success toast shows PKR amount + name on collection
+- Row fade-out animation: `fadingIds` Set + `fadeTimers` useRef; CSS `opacity-0 transition-all duration-500`, row removed from state after 500ms when status becomes PAID
+- `CollectAllModal`: sorted oldest-first by date; checkbox per receipt; distributes entered total across receipts using `min(remaining, shortfall)` per receipt; sequential PATCH calls
+- Reprint button (printer icon) on each rent receivable row — opens PDF in new tab via `/api/rent/receipt/{id}/pdf`
+
+**TASK-036: Cash status on rent receipt PDF**
+- `backend/pdf_utils.py`: Added `add_payment_status_bar()` method to NGODoc — PAID (green), SHORT (amber), ADVANCE (gray); colored left border, status label + detail text
+- `routers/rent.py`: Updated `receipt_pdf` endpoint to call `add_payment_status_bar()` after line items
+
+**TASK-037: Monthly cash summary report**
+- `routers/reports.py`: Added `GET /api/reports/monthly-cash?trust_id=X&year=Y` — 12-row response with rent/majlis billed/collected/outstanding/total-cash-in/cumulative per month + totals
+- `routers/reports.py`: Added `GET /api/reports/monthly-cash/excel` — styled openpyxl xlsx download
+- `ReportsPage.jsx`: Added "mc" tab to TABS array; added `MonthlyCashTab` component (9-column table, Export Excel button, totals row in dark footer); wired into content switcher
+- Frontend build: ✅ clean (499 kB JS, 1.09s)
+
+**TASK-038: Tenant payment history card**
+- `routers/tenants.py`: Added `GET /api/tenants/{id}/payment-history?year=Y` — 12-month grid data per tenant (status, billed, collected, shortfall per month + yearly totals)
+- `TenantsPage.jsx`: Added `BarChart2` (History) action button per row; `PaymentHistoryModal` with 12-cell color grid (4×3), status legend, yearly totals strip, "View Statement" quick-link; `histYear` state + year nav; modal wired via `modal.type === "history"`
+- Frontend build: ✅ clean (504 kB JS, 1.09s)
+
+**TASK-039: End of day cash summary**
+- `routers/reports.py`: Added `GET /api/reports/daily-summary?trust_id=&date_str=` — today's rent receipts + majlis bills with per-record cash status, summary totals
+- `routers/reports.py`: Added `GET /api/reports/daily-summary/pdf` — A4 reportlab PDF with rent/majlis tables and NET CASH IN bar
+- `DashboardPage.jsx`: Added `ClipboardList` "End of Day" section card between Quick Actions and Backup; `EodModal` component — summary cards (Billed/Collected/Outstanding), rent receipts table, majlis bills table, Print PDF button; modal shown when `eodOpen` state is true
+- Frontend build: ✅ clean (511 kB JS, 1.06s)
+
+---
+
 ### Session 2026-05-16 — TASK-015 through TASK-019
 
 **TASK-015: App Packaging**
@@ -465,3 +499,27 @@
 - `ReceivablesPage.jsx`: Stat cards now show skeleton animation while loading
 - `ImportExcelPage.jsx`: Fixed broken `ArrowPathRoundedSquare` import → replaced with `RotateCcw` (frontend build was failing)
 - Frontend build: verified clean (`vite build` 762ms, no errors)
+
+---
+
+### Session 2026-05-24 (continued) — TASK-040 through TASK-042
+
+**TASK-040: Arrears auto-carry on rent entry**
+- `routers/rent.py`: Added `include_arrears: bool = True` to `RentReceiptBody`; sweeps tenant's SHORT/ADVANCE receipts sorted by date asc before insert; auto-populates `rent_arrears` from total old shortfall; after saving new receipt, distributes cash oldest-first across old outstanding receipts (marks each PAID when fully settled); new receipt gets remainder; returns `arrears_settled_count` + `arrears_auto_filled_count`
+- `RentEntryPage.jsx`: Added `useRef`-based field focus; `tenantReceivables` state with `useEffect` fetcher on tenant change; second `useEffect` auto-fills `rentArrears` from total shortfall when `includeArrears` is ON; "Include arrears" amber toggle with outstanding count/amount badge; read-only note shows auto-fill count
+
+**TASK-041: Keyboard shortcuts and quick entry**
+- `RentEntryPage.jsx`: Global `useEffect` for Ctrl+S (save), Escape (close dialog / cancel edit); `ref={tenantSelectRef}` on tenant dropdown — focus returned after save; `ref={cashRef}` on cash input with Enter→submit; Quick Entry mode toggle (Zap icon, violet) — shows minimal 4-field form (Tenant | Month | Year | Cash Received), syncs To Period with From Period, hides calc summary and balance breakdown
+- `TenantsPage.jsx`: `useEffect` for Ctrl+N (open add-tenant modal), Escape (close modal), Ctrl+S inside modal form (trigger submit)
+
+**TASK-042: Trust-level settings page**
+- `models/models.py`: Added `TrustSettings` model (id, trust_id FK unique, address Text, default_water_charge Float, fiscal_year Integer, logo_base64 Text, updated_at DateTime)
+- `main.py`: Added `CREATE TABLE trust_settings` migration in `_run_migrations()`; registered `trust_settings_router`
+- `routers/trust_settings.py` (NEW): `GET /api/trust-settings/{trust_id}` (returns settings or defaults); `POST /api/trust-settings/{trust_id}` (upsert)
+- `pdf_utils.py`: Added `address` + `logo_b64` params to `NGODoc.__init__`; `add_header` shows address line below trust name; embeds logo as reportlab `Image` if provided (handles data-URI prefix)
+- `routers/rent.py`: `receipt_pdf` loads `TrustSettings` and passes `address` / `logo_b64` to NGODoc
+- `routers/reports.py`: `_report_doc` accepts `address` param; `report_pdf` loads TrustSettings and passes address to all three report-type `_report_doc` calls
+- `TrustSettingsPage.jsx` (NEW): Trust tab selector (HVHT/BIB/HTTT), address textarea, default water charge + fiscal year inputs, logo upload (base64 data-URI), logo preview with remove button, save button → POST endpoint, success/error toast
+- `Sidebar.jsx`: Added "Trust Settings" link under Settings section
+- `App.jsx`: Imported `TrustSettingsPage`, added route case and page label
+- Frontend build: ✅ clean (522 kB JS, 1.10s)

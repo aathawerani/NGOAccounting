@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
 import {
   Banknote, Inbox, TrendingUp, ArrowRight, Wallet, AlertTriangle,
-  HardDrive, CheckCircle, Loader2, Bell, RotateCcw,
+  HardDrive, CheckCircle, Loader2, Bell, RotateCcw, ClipboardList,
+  X, Printer,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -64,6 +65,7 @@ export default function DashboardPage({ onNavigate }) {
   const [backing, setBacking] = useState(false);
   const [backupMsg, setBackupMsg] = useState(null);
   const [maturing, setMaturing] = useState([]);
+  const [eodOpen, setEodOpen] = useState(false);
 
   const fetchSummary = useCallback(async () => {
     if (!selectedTrust) return;
@@ -326,6 +328,25 @@ export default function DashboardPage({ onNavigate }) {
         ))}
       </div>
 
+      {/* ── End of Day ───────────────────────────────────────────────────── */}
+      {selectedTrust && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-5 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center">
+              <ClipboardList className="w-5 h-5 text-slate-600" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-800">End of Day Summary</p>
+              <p className="text-xs text-gray-400">Review today's receipts, bills, and cash collected</p>
+            </div>
+          </div>
+          <button onClick={() => setEodOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium rounded-lg transition-colors">
+            <ClipboardList className="w-4 h-4" /> End of Day
+          </button>
+        </div>
+      )}
+
       {/* ── Backup ───────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-5 py-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
         <HardDrive className="w-5 h-5 text-gray-400 shrink-0" />
@@ -354,6 +375,170 @@ export default function DashboardPage({ onNavigate }) {
           {backing ? <Loader2 className="w-4 h-4 animate-spin" /> : <HardDrive className="w-4 h-4" />}
           {backing ? "Backing up…" : "Backup Now"}
         </button>
+      </div>
+      {/* ── EoD Modal ────────────────────────────────────────────────────── */}
+      {eodOpen && selectedTrust && (
+        <EodModal trustId={selectedTrust.id} onClose={() => setEodOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+function EodModal({ trustId, onClose }) {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const today = new Date().toISOString().split("T")[0];
+
+  useEffect(() => {
+    fetch(`${API}/api/reports/daily-summary?trust_id=${trustId}&date_str=${today}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false));
+  }, [trustId, today]);
+
+  const STATUS_BADGE = {
+    PAID:    "bg-emerald-100 text-emerald-700",
+    SHORT:   "bg-amber-100 text-amber-700",
+    ADVANCE: "bg-red-100 text-red-700",
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-gray-100 max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 rounded-t-2xl">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center">
+              <ClipboardList className="w-4 h-4 text-slate-600" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">End of Day Summary</h2>
+              <p className="text-xs text-gray-400">{data?.trust_name ?? "—"} · {today}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {data && (
+              <a href={`${API}/api/reports/daily-summary/pdf?trust_id=${trustId}&date_str=${today}`}
+                target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors">
+                <Printer className="w-3.5 h-3.5" /> Print PDF
+              </a>
+            )}
+            <button onClick={onClose}
+              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="overflow-auto flex-1 p-6 space-y-5">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="w-7 h-7 text-slate-400 animate-spin" />
+            </div>
+          ) : !data ? (
+            <p className="text-center text-sm text-gray-400 py-12">Failed to load summary.</p>
+          ) : (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-3 gap-px bg-gray-100 rounded-xl overflow-hidden">
+                {[
+                  { label: "Total Billed",    value: data.summary.total_billed },
+                  { label: "Cash Collected",  value: data.summary.total_collected },
+                  { label: "Outstanding",     value: data.summary.total_outstanding },
+                ].map(({ label, value }) => (
+                  <div key={label} className="bg-white px-4 py-3 text-center">
+                    <p className="text-xs text-gray-400 uppercase tracking-wide">{label}</p>
+                    <p className="text-lg font-bold mt-0.5 font-mono text-gray-900">
+                      PKR {Math.round(value).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Rent Receipts */}
+              <div>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                  Rent Receipts — {data.rent_receipts.length}
+                </h3>
+                {data.rent_receipts.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-4 bg-gray-50 rounded-lg">No rent receipts today</p>
+                ) : (
+                  <div className="rounded-lg border border-gray-100 overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100">
+                          {["Serial", "Tenant", "Period", "Billed", "Collected", "Status"].map((h, i) => (
+                            <th key={h} className={cn("px-3 py-2 font-semibold text-gray-500 uppercase tracking-wide",
+                              i >= 3 ? "text-right" : "text-left")}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {data.rent_receipts.map(r => (
+                          <tr key={r.id} className="hover:bg-gray-50/60">
+                            <td className="px-3 py-2 text-gray-500">{r.serial_no}</td>
+                            <td className="px-3 py-2 font-medium text-gray-800">{r.tenant_name}</td>
+                            <td className="px-3 py-2 text-gray-600">{r.period}</td>
+                            <td className="px-3 py-2 text-right font-mono text-gray-700">{r.total_amount.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-right font-mono text-emerald-700 font-semibold">{r.cash_received.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-right">
+                              <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-semibold",
+                                STATUS_BADGE[r.cash_status] ?? "bg-gray-100 text-gray-500")}>
+                                {r.cash_status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Majlis Bills */}
+              <div>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                  Majlis Bills — {data.majlis_bills.length}
+                </h3>
+                {data.majlis_bills.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-4 bg-gray-50 rounded-lg">No majlis bills today</p>
+                ) : (
+                  <div className="rounded-lg border border-gray-100 overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100">
+                          {["Event", "Billed", "Collected", "Status"].map((h, i) => (
+                            <th key={h} className={cn("px-3 py-2 font-semibold text-gray-500 uppercase tracking-wide",
+                              i >= 1 ? "text-right" : "text-left")}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {data.majlis_bills.map(b => (
+                          <tr key={b.id} className="hover:bg-gray-50/60">
+                            <td className="px-3 py-2 font-medium text-gray-800">{b.event_name}</td>
+                            <td className="px-3 py-2 text-right font-mono text-gray-700">{b.total_amount.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-right font-mono text-emerald-700 font-semibold">{b.cash_received.toLocaleString()}</td>
+                            <td className="px-3 py-2 text-right">
+                              <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-semibold",
+                                STATUS_BADGE[b.cash_status] ?? "bg-gray-100 text-gray-500")}>
+                                {b.cash_status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

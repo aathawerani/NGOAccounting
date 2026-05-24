@@ -1,5 +1,6 @@
 """Shared PDF helpers for voucher / receipt / report generation (reportlab)."""
 
+import base64
 from io import BytesIO
 from datetime import date as _date_type
 
@@ -10,7 +11,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    HRFlowable, KeepTogether,
+    HRFlowable, KeepTogether, Image,
 )
 from reportlab.platypus import PageBreak
 
@@ -92,11 +93,14 @@ class NGODoc:
     """
 
     def __init__(self, trust_name: str, trust_code: str,
-                 doc_title: str, pagesize=A5):
+                 doc_title: str, pagesize=A5,
+                 address: str = "", logo_b64: str = ""):
         self.trust_name = trust_name
         self.trust_code = trust_code
         self.doc_title  = doc_title
         self.pagesize   = pagesize
+        self.address    = address
+        self.logo_b64   = logo_b64
         self._buf = BytesIO()
         self._story: list = []
 
@@ -170,7 +174,35 @@ class NGODoc:
     def add_header(self, doc_number: str = "", doc_date: str = "",
                    hijri_date: str = ""):
         s = self._story
-        s.append(Paragraph(self.trust_name, self.S["header_trust"]))
+
+        # Logo + trust name side by side if logo provided
+        if self.logo_b64:
+            try:
+                raw = self.logo_b64
+                if "," in raw:
+                    raw = raw.split(",", 1)[1]
+                img_bytes = BytesIO(base64.b64decode(raw))
+                logo_img = Image(img_bytes, width=1.2 * cm, height=1.2 * cm)
+                logo_img.hAlign = "CENTER"
+                name_para = Paragraph(self.trust_name, self.S["header_trust"])
+                logo_table = Table(
+                    [[logo_img, name_para]],
+                    colWidths=[1.6 * cm, self._usable_width() - 1.6 * cm],
+                )
+                logo_table.setStyle(TableStyle([
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (0, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (0, -1), 4),
+                ]))
+                s.append(logo_table)
+            except Exception:
+                s.append(Paragraph(self.trust_name, self.S["header_trust"]))
+        else:
+            s.append(Paragraph(self.trust_name, self.S["header_trust"]))
+
+        if self.address:
+            s.append(Paragraph(self.address.replace("\n", "<br/>"),
+                                self.S["header_title"]))
         s.append(Spacer(1, 2 * mm))
         s.append(Paragraph(self.doc_title, self.S["header_title"]))
         s.append(Spacer(1, 2 * mm))
@@ -276,6 +308,57 @@ class NGODoc:
             ("VALIGN",  (0, 0), (-1, -1), "MIDDLE"),
             ("ALIGN",   (1, 0), (1, -1), "RIGHT"),
         ]))
+        self._story.append(t)
+
+    # ── Payment status bar ────────────────────────────────────────────────────
+
+    def add_payment_status_bar(self, cash_status: str,
+                                cash_received: float, total_amount: float):
+        """Coloured box below the totals showing PAID / PARTIAL / ADVANCE status."""
+        AMBER  = colors.HexColor("#D97706")
+        GRAY   = colors.HexColor("#64748B")
+        AMBER_LIGHT = colors.HexColor("#FFFBEB")
+        GREEN_LIGHT = colors.HexColor("#F0FDF4")
+
+        status = (cash_status or "PAID").upper()
+        shortfall = max(0.0, (total_amount or 0.0) - (cash_received or 0.0))
+
+        if status == "PAID":
+            bg, fg, label = GREEN_LIGHT, GREEN, "✔  PAID IN FULL"
+            detail = f"Cash Received: PKR {int(cash_received or 0):,}"
+        elif status == "SHORT":
+            bg, fg, label = AMBER_LIGHT, AMBER, "⚠  PARTIAL PAYMENT"
+            detail = (f"Cash Received: PKR {int(cash_received or 0):,}   "
+                      f"|   Balance Due: PKR {int(shortfall):,}")
+        else:
+            bg, fg, label = LIGHT, GRAY, "ℹ  ADVANCE NOTICE"
+            detail = "Payment Pending — No cash received at time of issue"
+
+        text_style = ParagraphStyle(
+            "status_label", parent=self.S["value"],
+            fontSize=9, textColor=fg, fontName="Helvetica-Bold",
+        )
+        detail_style = ParagraphStyle(
+            "status_detail", parent=self.S["label"],
+            fontSize=7.5, textColor=fg,
+        )
+        w = self._usable_width()
+        data = [[
+            Paragraph(label, text_style),
+            Paragraph(detail, detail_style),
+        ]]
+        t = Table(data, colWidths=[w * 0.38, w * 0.62])
+        t.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), bg),
+            ("LINEABOVE",     (0, 0), (-1, 0),  1.0, fg),
+            ("LINEBELOW",     (0, 0), (-1, 0),  0.5, fg),
+            ("LINEBEFORE",    (0, 0), (0, -1),  2.5, fg),
+            ("TOPPADDING",    (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING",   (0, 0), (0, -1),  8),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        self._story.append(Spacer(1, 3 * mm))
         self._story.append(t)
 
     # ── Signature block ────────────────────────────────────────────────────────

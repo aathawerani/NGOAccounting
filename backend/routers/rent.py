@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from audit import log_audit
 from database import get_db
-from models.models import AccountType, LedgerEntry, RentReceipt, Tenant, Trust
+from models.models import AccountType, LedgerEntry, RentReceipt, Tenant, Trust, TrustSettings
 from pdf_utils import NGODoc, hijri_str
 
 router = APIRouter(prefix="/api/rent", tags=["rent"])
@@ -34,6 +34,7 @@ class RentReceiptBody(BaseModel):
     water_arrears: float = 0.0
     debit_account_code: str = "CASH"   # which cash/bank account to debit
     cash_received: Optional[float] = None   # None = fully paid (= total)
+    include_arrears: bool = True            # auto-carry outstanding balances
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -282,6 +283,27 @@ def create_receipt(body: RentReceiptBody, db: Session = Depends(get_db)):
     ):
         raise HTTPException(status_code=400, detail="From date must be before or equal to To date")
 
+    # ── Arrears auto-carry: pull outstanding balances into new receipt ─────
+    old_outstanding = []
+    if body.include_arrears:
+        old_outstanding = (
+            db.query(RentReceipt)
+            .filter(
+                RentReceipt.tenant_id == body.tenant_id,
+                RentReceipt.cash_status.in_(["SHORT", "ADVANCE"]),
+            )
+            .order_by(RentReceipt.date.asc())
+            .all()
+        )
+        total_old_shortfall = sum(
+            max(0.0, (r.total_amount or 0.0) - (r.cash_received or 0.0))
+            for r in old_outstanding
+        )
+        if total_old_shortfall > 0:
+            # Fold entire past shortfall into rent_arrears
+            body.rent_arrears  = round(total_old_shortfall, 2)
+            body.water_arrears = 0.0
+
     # Compute dates
     from_date = date(body.from_year, body.from_month, 1)
     last_day = calendar.monthrange(body.to_year, body.to_month)[1]
@@ -337,12 +359,40 @@ def create_receipt(body: RentReceiptBody, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(receipt)
 
+    # ── Distribute cash oldest-first: clear old receipts, remainder → new ─
+    arrears_settled_count = 0
+    if body.include_arrears and old_outstanding:
+        remaining = cash_recv
+        for old_r in old_outstanding:
+            old_shortfall = max(0.0, (old_r.total_amount or 0.0) - (old_r.cash_received or 0.0))
+            if old_shortfall <= 0:
+                continue
+            allocate = min(remaining, old_shortfall)
+            if allocate > 0:
+                old_r.cash_received = round((old_r.cash_received or 0.0) + allocate, 2)
+                old_r.cash_status = _cash_status(old_r.cash_received, old_r.total_amount or 0.0)
+                if old_r.cash_status == "PAID":
+                    arrears_settled_count += 1
+                remaining = round(remaining - allocate, 2)
+
+        # What's left after clearing old goes to the new receipt
+        new_cash = round(max(0.0, remaining), 2)
+        receipt.cash_received = new_cash
+        receipt.cash_status = _cash_status(new_cash, receipt.total_amount or 0.0)
+        db.commit()
+        db.refresh(receipt)
+
     # Create double-entry ledger entries (CASH/BANK DR, rent/water CR)
     _create_journal_entries(receipt, trust.code, body.debit_account_code, db)
     log_audit(db, "rent_receipts", "create", record_id=receipt.id, trust_id=receipt.trust_id,
-              description=f"Receipt #{receipt.serial_no} created for {tenant.name} PKR {receipt.total_amount:,.0f}")
+              description=f"Receipt #{receipt.serial_no} created for {tenant.name} PKR {receipt.total_amount:,.0f}"
+              + (f" (settled {arrears_settled_count} old receipt(s))" if arrears_settled_count else ""))
     db.commit()
-    return _serialize(receipt)
+
+    result = _serialize(receipt)
+    result["arrears_settled_count"] = arrears_settled_count
+    result["arrears_auto_filled_count"] = len(old_outstanding)
+    return result
 
 
 @router.put("/{receipt_id}")
@@ -627,7 +677,11 @@ def receipt_pdf(receipt_id: int, db: Session = Depends(get_db)):
     doc_date = r.date.strftime("%d %B %Y") if r.date else "—"
     h_date = hijri_str(r.date) if r.date else ""
 
-    doc = NGODoc(trust_name, trust_code, "RENT RECEIPT")
+    ts = db.query(TrustSettings).filter(TrustSettings.trust_id == r.trust_id).first()
+    address  = (ts.address  or "") if ts else ""
+    logo_b64 = (ts.logo_base64 or "") if ts else ""
+    doc = NGODoc(trust_name, trust_code, "RENT RECEIPT",
+                 address=address, logo_b64=logo_b64)
     doc.add_header(
         doc_number=r.serial_no or str(receipt_id),
         doc_date=doc_date,
@@ -654,6 +708,11 @@ def receipt_pdf(receipt_id: int, db: Session = Depends(get_db)):
         items = [("Rent", r.rent_particulars or "", r.total_amount or 0.0)]
 
     doc.add_line_items(items, total=r.total_amount or 0.0)
+    doc.add_payment_status_bar(
+        cash_status=r.cash_status or "PAID",
+        cash_received=r.cash_received if r.cash_received is not None else (r.total_amount or 0.0),
+        total_amount=r.total_amount or 0.0,
+    )
     doc.add_signature()
     doc.add_footer_note(f"Generated by NGO Accounting System · {trust_name}")
 

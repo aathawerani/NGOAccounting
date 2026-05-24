@@ -26,6 +26,7 @@ from routers import fiscal_year as fiscal_year_router
 from routers import search as search_router
 from routers import audit_log as audit_log_router
 from routers import cash_position as cash_position_router
+from routers import trust_settings as trust_settings_router
 
 
 @asynccontextmanager
@@ -66,6 +67,7 @@ app.include_router(fiscal_year_router.router)
 app.include_router(search_router.router)
 app.include_router(audit_log_router.router)
 app.include_router(cash_position_router.router)
+app.include_router(trust_settings_router.router)
 
 
 # ── Migrations ───────────────────────────────────────────────────────────────
@@ -144,6 +146,23 @@ def _run_migrations():
             )
             conn.commit()
             print(f"DB migration: applied {len(mb_stmts)} column(s) to majlis_bills, backfilled cash_received")
+
+        # trust_settings table
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trust_settings'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE trust_settings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trust_id INTEGER NOT NULL UNIQUE REFERENCES trusts(id),
+                    address TEXT,
+                    default_water_charge REAL DEFAULT 0.0,
+                    fiscal_year INTEGER,
+                    logo_base64 TEXT,
+                    updated_at DATETIME
+                )
+            """)
+            conn.commit()
+            print("DB migration: created trust_settings table")
     finally:
         conn.close()
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Download, FileText, Loader2 } from "lucide-react";
 import { useTrust } from "../context/TrustContext";
 
@@ -8,6 +8,7 @@ const TABS = [
   { id: "tb", label: "Trial Balance" },
   { id: "is", label: "Income Statement" },
   { id: "bs", label: "Balance Sheet" },
+  { id: "mc", label: "Monthly Cash" },
 ];
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -320,6 +321,113 @@ function BalanceSheetTab({ trustId, year }) {
   );
 }
 
+// ── Monthly Cash Summary ──────────────────────────────────────────────────────
+
+function MonthlyCashTab({ trustId, year }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const effectiveYear = year === "all" ? CURRENT_YEAR : parseInt(year);
+
+  const load = useCallback(async () => {
+    if (!trustId) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API}/api/reports/monthly-cash?trust_id=${trustId}&year=${effectiveYear}`);
+      if (res.ok) setData(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  }, [trustId, effectiveYear]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function downloadExcel() {
+    window.open(`${API}/api/reports/monthly-cash/excel?trust_id=${trustId}&year=${effectiveYear}`, "_blank");
+  }
+
+  if (loading) return <p className="text-center py-10 text-gray-500">Loading…</p>;
+  if (!data) return null;
+
+  const T = data.totals;
+  const COL_H = "px-3 py-2.5 text-right font-medium text-gray-600 text-xs whitespace-nowrap";
+  const CELL  = "px-3 py-2 text-right text-sm";
+  const TCELL = "px-3 py-2 text-right text-sm font-bold";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm text-gray-500">Monthly billing and cash collection summary for {effectiveYear}</p>
+        <button
+          onClick={downloadExcel}
+          className="flex items-center gap-2 px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+        >
+          <Download className="w-4 h-4" /> Export Excel
+        </button>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-800 text-white">
+              <th className="px-3 py-2.5 text-left font-medium text-xs">Month</th>
+              <th className={COL_H}>Rent Billed</th>
+              <th className={COL_H}>Rent Collected</th>
+              <th className={COL_H}>Rent O/S</th>
+              <th className={COL_H}>Majlis Billed</th>
+              <th className={COL_H}>Majlis Collected</th>
+              <th className={COL_H}>Majlis O/S</th>
+              <th className={COL_H}>Total Cash In</th>
+              <th className={COL_H}>Cumulative</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.rows.map((row, i) => {
+              const hasActivity = row.rent_billed > 0 || row.majlis_billed > 0;
+              return (
+                <tr key={row.month} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                  <td className="px-3 py-2 font-semibold text-gray-700">{row.month}</td>
+                  <td className={CELL}>{row.rent_billed > 0 ? fmt(row.rent_billed) : "—"}</td>
+                  <td className={`${CELL} ${row.rent_collected > 0 ? "text-emerald-700" : "text-gray-300"}`}>
+                    {row.rent_collected > 0 ? fmt(row.rent_collected) : "—"}
+                  </td>
+                  <td className={`${CELL} ${row.rent_outstanding > 0 ? "text-red-600" : "text-gray-300"}`}>
+                    {row.rent_outstanding > 0 ? fmt(row.rent_outstanding) : "—"}
+                  </td>
+                  <td className={CELL}>{row.majlis_billed > 0 ? fmt(row.majlis_billed) : "—"}</td>
+                  <td className={`${CELL} ${row.majlis_collected > 0 ? "text-emerald-700" : "text-gray-300"}`}>
+                    {row.majlis_collected > 0 ? fmt(row.majlis_collected) : "—"}
+                  </td>
+                  <td className={`${CELL} ${row.majlis_outstanding > 0 ? "text-red-600" : "text-gray-300"}`}>
+                    {row.majlis_outstanding > 0 ? fmt(row.majlis_outstanding) : "—"}
+                  </td>
+                  <td className={`${CELL} font-semibold ${row.total_cash_in > 0 ? "text-gray-900" : "text-gray-300"}`}>
+                    {row.total_cash_in > 0 ? fmt(row.total_cash_in) : "—"}
+                  </td>
+                  <td className={`${CELL} ${row.cumulative_cash > 0 ? "text-slate-700" : "text-gray-300"}`}>
+                    {row.cumulative_cash > 0 ? fmt(row.cumulative_cash) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="bg-slate-800 text-white">
+              <td className="px-3 py-2.5 font-bold text-sm">TOTAL</td>
+              <td className={TCELL}>{fmt(T.rent_billed)}</td>
+              <td className={`${TCELL} text-emerald-400`}>{fmt(T.rent_collected)}</td>
+              <td className={`${TCELL} ${T.rent_outstanding > 0 ? "text-red-400" : "text-gray-400"}`}>{fmt(T.rent_outstanding)}</td>
+              <td className={TCELL}>{fmt(T.majlis_billed)}</td>
+              <td className={`${TCELL} text-emerald-400`}>{fmt(T.majlis_collected)}</td>
+              <td className={`${TCELL} ${T.majlis_outstanding > 0 ? "text-red-400" : "text-gray-400"}`}>{fmt(T.majlis_outstanding)}</td>
+              <td className={`${TCELL} text-emerald-300`}>{fmt(T.total_cash_in)}</td>
+              <td className={`${TCELL} text-blue-300`}>{fmt(T.cumulative_cash)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 const REPORT_TYPE_MAP = { tb: "trial-balance", is: "income-statement", bs: "balance-sheet" };
@@ -420,6 +528,8 @@ export default function ReportsPage() {
         <TrialBalancePage trustId={trustId} year={year} />
       ) : activeTab === "is" ? (
         <IncomeStatementTab trustId={trustId} year={year} />
+      ) : activeTab === "mc" ? (
+        <MonthlyCashTab trustId={trustId} year={year} />
       ) : (
         <BalanceSheetTab trustId={trustId} year={year} />
       )}

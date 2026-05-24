@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, Receipt, AlertCircle, Pencil, X, ChevronDown, ChevronRight, Printer, FileDown } from "lucide-react";
+import { Trash2, Receipt, AlertCircle, Pencil, X, ChevronDown, ChevronRight, Printer, FileDown, Zap } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -48,6 +48,7 @@ function emptyForm() {
     debitAccount: "CASH",
     cashReceived: "",   // "" means "same as total" (fully paid)
     noCash: false,
+    includeArrears: true,
   };
 }
 
@@ -124,6 +125,13 @@ export default function RentEntryPage() {
   const [form, setForm] = useState(emptyForm());
   const editing = editTarget !== null;
   const [tenantReceivables, setTenantReceivables] = useState([]);
+  const [quickEntry, setQuickEntry] = useState(false);
+
+  const tenantSelectRef = useRef(null);
+  const dateRef         = useRef(null);
+  const fromMonthRef    = useRef(null);
+  const cashRef         = useRef(null);
+  const submitRef       = useRef(null);
 
   // ── Imported ledger receipts state ────────────────────────────────────────
   const [ledgerReceipts, setLedgerReceipts] = useState([]);
@@ -210,6 +218,7 @@ export default function RentEntryPage() {
     fetchCashAccounts();
   }, [fetchTenants, fetchReceipts, fetchNextSerial, fetchLedgerReceipts, fetchCashAccounts]);
 
+  // Fetch receivables when tenant changes
   useEffect(() => {
     if (!form.tenantId) { setTenantReceivables([]); return; }
     fetch(`${API}/api/rent/tenant/${form.tenantId}/receivables`)
@@ -217,6 +226,35 @@ export default function RentEntryPage() {
       .then(setTenantReceivables)
       .catch(() => setTenantReceivables([]));
   }, [form.tenantId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-fill arrears when receivables change or toggle changes (not in edit mode)
+  useEffect(() => {
+    if (editing) return;
+    if (form.includeArrears && tenantReceivables.length > 0) {
+      const totalShortfall = tenantReceivables.reduce((s, r) => s + (r.shortfall ?? 0), 0);
+      setForm(f => ({
+        ...f,
+        rentArrears: totalShortfall > 0 ? String(Math.round(totalShortfall)) : "",
+        waterArrears: "",
+      }));
+    }
+  }, [tenantReceivables, form.includeArrears]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Global keyboard shortcuts: Ctrl+S → submit, Escape → cancel/close
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape") {
+        if (deleteTarget) { setDeleteTarget(null); return; }
+        if (editing) { cancelEdit(); return; }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        submitRef.current?.click();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editing, deleteTarget]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Calculations ─────────────────────────────────────────────────────────────
   const n = form.tenantId
@@ -283,6 +321,7 @@ export default function RentEntryPage() {
       water_arrears: arrW,
       debit_account_code: form.debitAccount || "CASH",
       cash_received: actualCashReceived,
+      include_arrears: !editing && form.includeArrears,
     };
 
     try {
@@ -294,11 +333,16 @@ export default function RentEntryPage() {
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Failed to save");
-      addToast(editing ? "Receipt updated" : "Receipt recorded");
+      const saved = await res.json();
+      const settledMsg = saved.arrears_settled_count
+        ? ` · cleared ${saved.arrears_settled_count} old receipt(s)` : "";
+      addToast(editing ? "Receipt updated" : `Receipt recorded${settledMsg}`);
       setForm(emptyForm());
       setEditTarget(null);
       fetchReceipts();
       fetchNextSerial();
+      // Return focus to tenant dropdown for fast multi-entry
+      setTimeout(() => tenantSelectRef.current?.focus(), 50);
     } catch (err) {
       addToast(err.message, "error");
     } finally {
@@ -348,6 +392,20 @@ export default function RentEntryPage() {
               #{nextSerial}
             </span>
           )}
+          {!editing && (
+            <button
+              type="button"
+              onClick={() => setQuickEntry(q => !q)}
+              title="Quick Entry mode — minimal 4-field form (Ctrl+Q)"
+              className={cn("ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border transition-colors",
+                quickEntry
+                  ? "bg-violet-600 text-white border-violet-600"
+                  : "border-gray-200 text-gray-500 hover:border-violet-400 hover:text-violet-600"
+              )}
+            >
+              <Zap className="w-3.5 h-3.5" /> Quick Entry
+            </button>
+          )}
           {editing && (
             <button onClick={cancelEdit} className="ml-auto flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800">
               <X className="w-4 h-4" /> Cancel Edit
@@ -361,8 +419,10 @@ export default function RentEntryPage() {
             <div className="md:col-span-1">
               <label className="block text-xs font-medium text-gray-700 mb-1">Tenant *</label>
               <select
+                ref={tenantSelectRef}
                 value={form.tenantId}
                 onChange={(e) => setForm((f) => ({ ...f, tenantId: e.target.value }))}
+                onKeyDown={e => e.key === "Enter" && (e.preventDefault(), dateRef.current?.focus())}
                 required
                 disabled={loadingTenants}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-50"
@@ -376,9 +436,11 @@ export default function RentEntryPage() {
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Receipt Date *</label>
               <input
+                ref={dateRef}
                 type="date"
                 value={form.receiptDate}
                 onChange={(e) => setForm((f) => ({ ...f, receiptDate: e.target.value }))}
+                onKeyDown={e => e.key === "Enter" && (e.preventDefault(), fromMonthRef.current?.focus())}
                 required
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
@@ -434,22 +496,28 @@ export default function RentEntryPage() {
             </div>
           )}
 
-          {/* Period */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Period — hidden in Quick Entry; only From Period shown */}
+          <div className={cn("grid grid-cols-1 md:grid-cols-2 gap-4", quickEntry && "md:grid-cols-1")}>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">From Period *</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                {quickEntry ? "Month / Year *" : "From Period *"}
+              </label>
               <div className="flex gap-2">
-                <select value={form.fromMonth} onChange={(e) => setForm((f) => ({ ...f, fromMonth: Number(e.target.value) }))}
+                <select ref={fromMonthRef} value={form.fromMonth}
+                  onChange={(e) => setForm((f) => ({ ...f, fromMonth: Number(e.target.value), toMonth: Number(e.target.value) }))}
+                  onKeyDown={e => e.key === "Enter" && (e.preventDefault(), cashRef.current?.focus())}
                   className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
                   {MONTHS.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
                 </select>
-                <select value={form.fromYear} onChange={(e) => setForm((f) => ({ ...f, fromYear: Number(e.target.value) }))}
+                <select value={form.fromYear}
+                  onChange={(e) => setForm((f) => ({ ...f, fromYear: Number(e.target.value), toYear: quickEntry ? Number(e.target.value) : f.toYear }))}
                   className="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
                   {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
             </div>
-            <div>
+            {/* To Period hidden in quick entry — mirrors From Period */}
+            <div className={cn(quickEntry && "hidden")}>
               <label className="block text-xs font-medium text-gray-700 mb-1">To Period *</label>
               <div className="flex gap-2">
                 <select value={form.toMonth} onChange={(e) => setForm((f) => ({ ...f, toMonth: Number(e.target.value) }))}
@@ -464,24 +532,72 @@ export default function RentEntryPage() {
             </div>
           </div>
 
-          {/* Arrears */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Rent Arrears (PKR)</label>
-              <input type="number" min="0" step="0.01" value={form.rentArrears} placeholder="0"
-                onChange={(e) => setForm((f) => ({ ...f, rentArrears: e.target.value }))}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Water Arrears (PKR)</label>
-              <input type="number" min="0" step="0.01" value={form.waterArrears} placeholder="0"
-                onChange={(e) => setForm((f) => ({ ...f, waterArrears: e.target.value }))}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-            </div>
-          </div>
+          {/* Arrears — hidden in Quick Entry */}
+          {!quickEntry && (() => {
+            const autoFilled = !editing && form.includeArrears && tenantReceivables.length > 0;
+            const totalShortfall = tenantReceivables.reduce((s, r) => s + (r.shortfall ?? 0), 0);
+            return (
+              <div className="space-y-2">
+                {/* Include arrears toggle — only shown when there are outstanding receipts and not editing */}
+                {!editing && tenantReceivables.length > 0 && (
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={form.includeArrears}
+                      onChange={e => {
+                        const checked = e.target.checked;
+                        if (!checked) {
+                          setForm(f => ({ ...f, includeArrears: false, rentArrears: "", waterArrears: "" }));
+                        } else {
+                          setForm(f => ({ ...f, includeArrears: true }));
+                        }
+                      }}
+                      className="w-4 h-4 rounded accent-amber-500"
+                    />
+                    <span className="text-sm text-gray-700">
+                      Include arrears in this receipt
+                    </span>
+                    <span className="text-xs text-amber-600 font-medium">
+                      ({tenantReceivables.length} outstanding receipt{tenantReceivables.length !== 1 ? "s" : ""} · {PKR(totalShortfall)})
+                    </span>
+                  </label>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Rent Arrears (PKR)
+                      {autoFilled && <span className="ml-1 text-amber-600">(auto-filled)</span>}
+                    </label>
+                    <input type="number" min="0" step="0.01" value={form.rentArrears} placeholder="0"
+                      readOnly={autoFilled}
+                      onChange={(e) => setForm((f) => ({ ...f, rentArrears: e.target.value }))}
+                      className={cn("w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500",
+                        autoFilled ? "border-amber-200 bg-amber-50 text-amber-800 cursor-default" : "border-gray-300")} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Water Arrears (PKR)
+                      {autoFilled && <span className="ml-1 text-amber-600">(auto-filled)</span>}
+                    </label>
+                    <input type="number" min="0" step="0.01" value={form.waterArrears} placeholder="0"
+                      readOnly={autoFilled}
+                      onChange={(e) => setForm((f) => ({ ...f, waterArrears: e.target.value }))}
+                      className={cn("w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500",
+                        autoFilled ? "border-amber-200 bg-amber-50 text-amber-800 cursor-default" : "border-gray-300")} />
+                  </div>
+                </div>
+                {autoFilled && (
+                  <p className="text-xs text-amber-600">
+                    ℹ Arrears auto-filled from {tenantReceivables.length} outstanding receipt(s).
+                    Cash collected will clear oldest first, remainder applied to this receipt.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
 
-          {/* Calculation summary */}
-          {form.tenantId && (
+          {/* Calculation summary — hidden in Quick Entry */}
+          {!quickEntry && form.tenantId && (
             <div className={cn("rounded-lg border p-4 text-sm", validRange ? "bg-blue-50 border-blue-100" : "bg-amber-50 border-amber-200")}>
               {!validRange ? (
                 <p className="text-amber-700 font-medium">From date must be before or equal to To date.</p>
@@ -506,11 +622,13 @@ export default function RentEntryPage() {
                   <div className="flex-1">
                     <label className="block text-xs font-medium text-gray-700 mb-1">Cash Received (PKR)</label>
                     <input
+                      ref={cashRef}
                       type="number" min="0" step="0.01"
                       value={form.noCash ? "" : form.cashReceived}
                       placeholder={form.noCash ? "0 — no cash" : String(grandTotal)}
                       disabled={form.noCash}
                       onChange={e => setForm(f => ({ ...f, cashReceived: e.target.value }))}
+                      onKeyDown={e => e.key === "Enter" && (e.preventDefault(), submitRef.current?.click())}
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-400"
                     />
                   </div>
@@ -524,18 +642,20 @@ export default function RentEntryPage() {
                     <span className="text-sm text-gray-700 whitespace-nowrap">No cash received</span>
                   </label>
                 </div>
-                <div className="flex items-center gap-6 text-sm">
-                  <div><span className="text-xs text-gray-500 block">Total</span><span className="font-semibold">{PKR(grandTotal)}</span></div>
-                  <div><span className="text-xs text-gray-500 block">Cash Received</span><span className={cn("font-semibold", actualCash < grandTotal ? "text-amber-600" : "text-emerald-700")}>{PKR(actualCash)}</span></div>
-                  <div><span className="text-xs text-gray-500 block">Balance Due</span><span className={cn("font-semibold", shortfall > 0 ? "text-red-600" : "text-gray-400")}>{shortfall > 0 ? PKR(shortfall) : "—"}</span></div>
-                  <div><span className="text-xs text-gray-500 block">Status</span>
-                    <span className={cn("inline-block px-2 py-0.5 rounded-full text-xs font-semibold", CASH_STATUS_STYLE[
-                      actualCash <= 0 ? "ADVANCE" : actualCash >= grandTotal ? "PAID" : "SHORT"
-                    ])}>
-                      {actualCash <= 0 ? "ADVANCE" : actualCash >= grandTotal ? "PAID" : "SHORT"}
-                    </span>
+                {!quickEntry && (
+                  <div className="flex items-center gap-6 text-sm">
+                    <div><span className="text-xs text-gray-500 block">Total</span><span className="font-semibold">{PKR(grandTotal)}</span></div>
+                    <div><span className="text-xs text-gray-500 block">Cash Received</span><span className={cn("font-semibold", actualCash < grandTotal ? "text-amber-600" : "text-emerald-700")}>{PKR(actualCash)}</span></div>
+                    <div><span className="text-xs text-gray-500 block">Balance Due</span><span className={cn("font-semibold", shortfall > 0 ? "text-red-600" : "text-gray-400")}>{shortfall > 0 ? PKR(shortfall) : "—"}</span></div>
+                    <div><span className="text-xs text-gray-500 block">Status</span>
+                      <span className={cn("inline-block px-2 py-0.5 rounded-full text-xs font-semibold", CASH_STATUS_STYLE[
+                        actualCash <= 0 ? "ADVANCE" : actualCash >= grandTotal ? "PAID" : "SHORT"
+                      ])}>
+                        {actualCash <= 0 ? "ADVANCE" : actualCash >= grandTotal ? "PAID" : "SHORT"}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             );
           })()}
@@ -547,7 +667,7 @@ export default function RentEntryPage() {
                 Cancel
               </button>
             )}
-            <button type="submit" disabled={submitting || !validRange || !form.tenantId}
+            <button ref={submitRef} type="submit" disabled={submitting || !validRange || !form.tenantId}
               className={cn(
                 "px-6 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-colors",
                 editing ? "bg-amber-500 hover:bg-amber-600" : "bg-emerald-600 hover:bg-emerald-700"

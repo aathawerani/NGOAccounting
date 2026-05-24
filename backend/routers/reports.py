@@ -18,7 +18,7 @@ from reportlab.platypus import (
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models.models import AccountType, LedgerEntry, Trust
+from models.models import AccountType, LedgerEntry, Trust, TrustSettings
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -200,7 +200,7 @@ _BORDER = colors.HexColor("#CBD5E1")
 _PKR = lambda n: f"PKR {int(n):,}" if n else "—"
 
 
-def _report_doc(buf, trust_name: str, title: str, period: str):
+def _report_doc(buf, trust_name: str, title: str, period: str, address: str = ""):
     """Return (doc, story, styles) for a report PDF."""
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
@@ -232,10 +232,15 @@ def _report_doc(buf, trust_name: str, title: str, period: str):
                          textColor=_DARK, alignment=TA_RIGHT),
         "right_b": _sty("right_b", fontSize=9,  fontName="Helvetica-Bold",
                          textColor=_DARK, alignment=TA_RIGHT),
+        "address": _sty("address", fontSize=8,  fontName="Helvetica",
+                         textColor=_MID, alignment=TA_CENTER),
     }
 
     story = []
     story.append(Paragraph(trust_name, stys["trust"]))
+    if address:
+        story.append(Spacer(1, 1*mm))
+        story.append(Paragraph(address.replace("\n", "<br/>"), stys["address"]))
     story.append(Spacer(1, 2*mm))
     story.append(Paragraph(title, stys["title"]))
     story.append(Paragraph(period, stys["period"]))
@@ -335,12 +340,15 @@ def report_pdf(body: ReportPDFBody, db: Session = Depends(get_db)):
     ).order_by(AccountType.account_name).all()
     sums = _totals(body.trust_id, d_from, d_to, db)
 
+    ts = db.query(TrustSettings).filter(TrustSettings.trust_id == body.trust_id).first()
+    trust_address = (ts.address or "") if ts else ""
+
     from io import BytesIO
     buf = BytesIO()
 
     if body.report_type == "income-statement":
         title = "INCOME STATEMENT"
-        doc, story, stys = _report_doc(buf, trust.name, title, period_str)
+        doc, story, stys = _report_doc(buf, trust.name, title, period_str, trust_address)
 
         income_rows, expense_rows = [], []
         total_income = total_expense = 0.0
@@ -394,7 +402,7 @@ def report_pdf(body: ReportPDFBody, db: Session = Depends(get_db)):
 
     elif body.report_type == "balance-sheet":
         title = "BALANCE SHEET"
-        doc, story, stys = _report_doc(buf, trust.name, title, period_str)
+        doc, story, stys = _report_doc(buf, trust.name, title, period_str, trust_address)
 
         asset_rows, liab_rows, equity_rows = [], [], []
         total_assets = total_liab = total_equity = 0.0
@@ -464,7 +472,7 @@ def report_pdf(body: ReportPDFBody, db: Session = Depends(get_db)):
 
     elif body.report_type == "trial-balance":
         title = "TRIAL BALANCE"
-        doc, story, stys = _report_doc(buf, trust.name, title, period_str)
+        doc, story, stys = _report_doc(buf, trust.name, title, period_str, trust_address)
 
         pw = A4[0] - 4*cm
         col_widths = [pw * 0.12, pw * 0.48, pw * 0.13, pw * 0.13, pw * 0.14]
@@ -537,6 +545,466 @@ def report_pdf(body: ReportPDFBody, db: Session = Depends(get_db)):
     buf.seek(0)
 
     fname = f"{trust.code}_{body.report_type}_{body.year or 'all'}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{fname}"'},
+    )
+
+
+# ── Monthly Cash Summary ───────────────────────────────────────────────────────
+
+@router.get("/monthly-cash")
+def monthly_cash(trust_id: int, year: int, db: Session = Depends(get_db)):
+    """Return month-by-month rent + majlis billing/collection/outstanding summary."""
+    from models.models import RentReceipt, MajlisBill
+
+    MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    rows = []
+    cum_cash = 0.0
+    total_rent_billed = total_rent_collected = total_rent_out = 0.0
+    total_maj_billed = total_maj_collected = total_maj_out = 0.0
+
+    for m in range(1, 13):
+        d_from = date(year, m, 1)
+        import calendar
+        last_day = calendar.monthrange(year, m)[1]
+        d_to = date(year, m, last_day)
+
+        # Rent receipts issued in this month
+        rent_recs = db.query(RentReceipt).filter(
+            RentReceipt.trust_id == trust_id,
+            RentReceipt.date >= d_from,
+            RentReceipt.date <= d_to,
+        ).all()
+        rent_billed    = sum(r.total_amount or 0.0 for r in rent_recs)
+        rent_collected = sum(r.cash_received or 0.0 for r in rent_recs)
+        rent_out       = round(rent_billed - rent_collected, 2)
+
+        # Majlis bills issued in this month
+        maj_bills = db.query(MajlisBill).filter(
+            MajlisBill.trust_id == trust_id,
+            MajlisBill.date >= d_from,
+            MajlisBill.date <= d_to,
+        ).all()
+        maj_billed    = sum(b.total_amount or 0.0 for b in maj_bills)
+        maj_collected = sum(b.cash_received or 0.0 for b in maj_bills)
+        maj_out       = round(maj_billed - maj_collected, 2)
+
+        month_cash = round(rent_collected + maj_collected, 2)
+        cum_cash   = round(cum_cash + month_cash, 2)
+
+        total_rent_billed    += rent_billed
+        total_rent_collected += rent_collected
+        total_rent_out       += rent_out
+        total_maj_billed     += maj_billed
+        total_maj_collected  += maj_collected
+        total_maj_out        += maj_out
+
+        rows.append({
+            "month": MONTHS[m - 1],
+            "month_num": m,
+            "rent_billed":    round(rent_billed, 2),
+            "rent_collected": round(rent_collected, 2),
+            "rent_outstanding": rent_out,
+            "majlis_billed":    round(maj_billed, 2),
+            "majlis_collected": round(maj_collected, 2),
+            "majlis_outstanding": maj_out,
+            "total_cash_in": month_cash,
+            "cumulative_cash": cum_cash,
+        })
+
+    return {
+        "year": year,
+        "trust_id": trust_id,
+        "rows": rows,
+        "totals": {
+            "rent_billed":    round(total_rent_billed, 2),
+            "rent_collected": round(total_rent_collected, 2),
+            "rent_outstanding": round(total_rent_out, 2),
+            "majlis_billed":    round(total_maj_billed, 2),
+            "majlis_collected": round(total_maj_collected, 2),
+            "majlis_outstanding": round(total_maj_out, 2),
+            "total_cash_in": round(total_rent_collected + total_maj_collected, 2),
+            "cumulative_cash": cum_cash,
+        },
+    }
+
+
+@router.get("/monthly-cash/excel")
+def monthly_cash_excel(trust_id: int, year: int, db: Session = Depends(get_db)):
+    """Export monthly cash summary as Excel (one sheet per trust, or just current trust)."""
+    from io import BytesIO as _BytesIO
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from models.models import Trust as TrustModel
+
+    trust = db.query(TrustModel).filter(TrustModel.id == trust_id).first()
+    if not trust:
+        raise HTTPException(404, "Trust not found")
+
+    data = monthly_cash(trust_id, year, db)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"{trust.code} {year}"
+
+    HEADERS = [
+        "Month", "Rent Billed", "Rent Collected", "Rent Outstanding",
+        "Majlis Billed", "Majlis Collected", "Majlis Outstanding",
+        "Total Cash In", "Cumulative Cash",
+    ]
+
+    hdr_fill = PatternFill("solid", fgColor="1E293B")
+    hdr_font = Font(bold=True, color="FFFFFF", size=10)
+    tot_fill = PatternFill("solid", fgColor="E2E8F0")
+    tot_font = Font(bold=True, size=10)
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.append([f"{trust.name} — Monthly Cash Summary {year}"])
+    ws.cell(1, 1).font = Font(bold=True, size=12)
+    ws.append([])
+    ws.append(HEADERS)
+    for cell in ws[3]:
+        cell.fill = hdr_fill
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = border
+
+    for row in data["rows"]:
+        ws.append([
+            row["month"],
+            row["rent_billed"], row["rent_collected"], row["rent_outstanding"],
+            row["majlis_billed"], row["majlis_collected"], row["majlis_outstanding"],
+            row["total_cash_in"], row["cumulative_cash"],
+        ])
+        for cell in ws[ws.max_row]:
+            cell.border = border
+            if cell.column > 1:
+                cell.number_format = '#,##0'
+                cell.alignment = Alignment(horizontal="right")
+
+    t = data["totals"]
+    ws.append([
+        "TOTAL",
+        t["rent_billed"], t["rent_collected"], t["rent_outstanding"],
+        t["majlis_billed"], t["majlis_collected"], t["majlis_outstanding"],
+        t["total_cash_in"], t["cumulative_cash"],
+    ])
+    for cell in ws[ws.max_row]:
+        cell.fill = tot_fill
+        cell.font = tot_font
+        cell.border = border
+        if cell.column > 1:
+            cell.number_format = '#,##0'
+            cell.alignment = Alignment(horizontal="right")
+
+    for col in ws.columns:
+        max_len = max((len(str(c.value or "")) for c in col), default=0)
+        ws.column_dimensions[col[0].column_letter].width = max(12, min(max_len + 2, 22))
+
+    buf = _BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"{trust.code}_monthly_cash_{year}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ── Daily Cash Summary ────────────────────────────────────────────────────────
+
+@router.get("/daily-summary")
+def daily_summary(
+    trust_id: int,
+    date_str: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Today's (or given date's) rent receipts, majlis bills, and cash totals."""
+    from models.models import RentReceipt, MajlisBill, Tenant
+    from datetime import date as _date
+
+    trust = db.query(Trust).filter(Trust.id == trust_id).first()
+    if not trust:
+        raise HTTPException(404, "Trust not found")
+
+    try:
+        target = _date.fromisoformat(date_str) if date_str else _date.today()
+    except ValueError:
+        raise HTTPException(400, "Invalid date format — use YYYY-MM-DD")
+
+    rent_recs = db.query(RentReceipt).filter(
+        RentReceipt.trust_id == trust_id,
+        RentReceipt.date == target,
+    ).all()
+
+    tenant_ids = [r.tenant_id for r in rent_recs if r.tenant_id]
+    tenants_map = {}
+    if tenant_ids:
+        for t in db.query(Tenant).filter(Tenant.id.in_(tenant_ids)).all():
+            tenants_map[t.id] = t.name
+
+    rent_rows = []
+    for r in rent_recs:
+        rent_rows.append({
+            "id": r.id,
+            "serial_no": r.serial_no or "—",
+            "tenant_name": tenants_map.get(r.tenant_id, r.party_name or "—"),
+            "period": f"{r.from_date}" if r.from_date else "—",
+            "total_amount": round(r.total_amount or 0.0, 2),
+            "cash_received": round(r.cash_received or 0.0, 2),
+            "cash_status": r.cash_status or "PAID",
+        })
+
+    maj_bills = db.query(MajlisBill).filter(
+        MajlisBill.trust_id == trust_id,
+        MajlisBill.date == target,
+    ).all()
+    maj_rows = []
+    for b in maj_bills:
+        maj_rows.append({
+            "id": b.id,
+            "event_name": b.event_name or "—",
+            "total_amount": round(b.total_amount or 0.0, 2),
+            "cash_received": round(b.cash_received or 0.0, 2),
+            "cash_status": b.cash_status or "PAID",
+        })
+
+    rent_billed    = sum(r["total_amount"]  for r in rent_rows)
+    rent_collected = sum(r["cash_received"] for r in rent_rows)
+    maj_billed     = sum(b["total_amount"]  for b in maj_rows)
+    maj_collected  = sum(b["cash_received"] for b in maj_rows)
+
+    return {
+        "date": target.isoformat(),
+        "trust_id": trust_id,
+        "trust_name": trust.name,
+        "trust_code": trust.code,
+        "rent_receipts": rent_rows,
+        "majlis_bills": maj_rows,
+        "summary": {
+            "rent_receipts_count": len(rent_rows),
+            "rent_billed":    round(rent_billed, 2),
+            "rent_collected": round(rent_collected, 2),
+            "majlis_bills_count": len(maj_rows),
+            "majlis_billed":    round(maj_billed, 2),
+            "majlis_collected": round(maj_collected, 2),
+            "total_billed":    round(rent_billed + maj_billed, 2),
+            "total_collected": round(rent_collected + maj_collected, 2),
+            "total_outstanding": round(
+                (rent_billed - rent_collected) + (maj_billed - maj_collected), 2
+            ),
+        },
+    }
+
+
+@router.get("/daily-summary/pdf")
+def daily_summary_pdf(
+    trust_id: int,
+    date_str: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """A4 PDF of the end-of-day cash summary."""
+    from io import BytesIO as _BytesIO
+    from datetime import date as _date
+    from reportlab.lib.pagesizes import A4
+
+    data = daily_summary(trust_id, date_str, db)
+    target = _date.fromisoformat(data["date"])
+
+    DARK2   = colors.HexColor("#1E293B")
+    GREEN2  = colors.HexColor("#16A34A")
+    MID2    = colors.HexColor("#64748B")
+    LIGHT2  = colors.HexColor("#F8FAFC")
+    BORDER2 = colors.HexColor("#CBD5E1")
+    WHITE2  = colors.white
+    AMBER2  = colors.HexColor("#D97706")
+
+    buf = _BytesIO()
+    ss = getSampleStyleSheet()
+
+    def S(name, **kw):
+        return ParagraphStyle(name, parent=ss["Normal"], **kw)
+
+    stys = {
+        "trust": S("ds_trust", fontSize=14, fontName="Helvetica-Bold",
+                   textColor=DARK2, alignment=TA_CENTER),
+        "title": S("ds_title", fontSize=10, fontName="Helvetica",
+                   textColor=MID2, alignment=TA_CENTER),
+        "section": S("ds_sect", fontSize=9, fontName="Helvetica-Bold",
+                     textColor=WHITE2),
+        "cell":   S("ds_cell", fontSize=8, fontName="Helvetica", textColor=DARK2),
+        "cell_r": S("ds_cr",   fontSize=8, fontName="Helvetica",
+                    textColor=DARK2, alignment=TA_RIGHT),
+        "bold_r": S("ds_br",   fontSize=8, fontName="Helvetica-Bold",
+                    textColor=DARK2, alignment=TA_RIGHT),
+        "total_l": S("ds_tl",  fontSize=9, fontName="Helvetica-Bold", textColor=WHITE2),
+        "total_r": S("ds_tr",  fontSize=9, fontName="Helvetica-Bold",
+                     textColor=WHITE2, alignment=TA_RIGHT),
+        "kv_lbl": S("ds_kl",   fontSize=8, fontName="Helvetica", textColor=MID2),
+        "kv_val": S("ds_kv",   fontSize=8, fontName="Helvetica-Bold", textColor=DARK2),
+        "footer": S("ds_ft",   fontSize=7, fontName="Helvetica",
+                    textColor=BORDER2, alignment=TA_CENTER),
+    }
+
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=2*cm, rightMargin=2*cm,
+        topMargin=1.5*cm, bottomMargin=1.5*cm,
+    )
+    pw = A4[0] - 4*cm
+    story = []
+
+    story.append(Paragraph(data["trust_name"], stys["trust"]))
+    story.append(Spacer(1, 2*mm))
+    story.append(Paragraph("END OF DAY CASH SUMMARY", stys["title"]))
+    story.append(Paragraph(f"Date: {target.strftime('%d %B %Y')}", stys["title"]))
+    story.append(Spacer(1, 2*mm))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=GREEN2, spaceAfter=4*mm))
+
+    PKR2 = lambda n: f"PKR {int(n):,}" if n else "—"
+    thin = BORDER2
+
+    def _section_hdr(label):
+        d = [[Paragraph(label, stys["section"])]]
+        t = Table(d, colWidths=[pw])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), DARK2),
+            ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ]))
+        return t
+
+    # ── Rent Receipts ──────────────────────────────────────────────────────
+    story.append(_section_hdr(f"RENT RECEIPTS ({len(data['rent_receipts'])})"))
+
+    if data["rent_receipts"]:
+        cw = [pw*0.12, pw*0.36, pw*0.18, pw*0.17, pw*0.17]
+        hdrs = ["Serial", "Tenant", "Period", "Billed", "Collected"]
+        hdr_row = [Paragraph(h, stys["section"]) for h in hdrs]
+        hdr_t = Table([hdr_row], colWidths=cw)
+        hdr_t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), MID2),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING",   (0, 0), (0, -1), 4),
+            ("ALIGN",         (3, 0), (-1, -1), "RIGHT"),
+        ]))
+        story.append(hdr_t)
+        rows_data = []
+        for r in data["rent_receipts"]:
+            rows_data.append([
+                Paragraph(r["serial_no"], stys["cell"]),
+                Paragraph(r["tenant_name"], stys["cell"]),
+                Paragraph(r["period"], stys["cell"]),
+                Paragraph(PKR2(r["total_amount"]), stys["cell_r"]),
+                Paragraph(PKR2(r["cash_received"]), stys["bold_r"]),
+            ])
+        dt = Table(rows_data, colWidths=cw)
+        dt.setStyle(TableStyle([
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LINEBELOW",     (0, 0), (-1, -1), 0.3, thin),
+            ("ALIGN",         (3, 0), (-1, -1), "RIGHT"),
+        ]))
+        story.append(dt)
+    else:
+        story.append(Paragraph("  No rent receipts today.", stys["cell"]))
+
+    story.append(Spacer(1, 4*mm))
+
+    # ── Majlis Bills ───────────────────────────────────────────────────────
+    story.append(_section_hdr(f"MAJLIS BILLS ({len(data['majlis_bills'])})"))
+
+    if data["majlis_bills"]:
+        cw2 = [pw*0.55, pw*0.22, pw*0.23]
+        hdr_row2 = [Paragraph(h, stys["section"]) for h in ["Event", "Billed", "Collected"]]
+        hdr_t2 = Table([hdr_row2], colWidths=cw2)
+        hdr_t2.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), MID2),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING",   (0, 0), (0, -1), 4),
+            ("ALIGN",         (1, 0), (-1, -1), "RIGHT"),
+        ]))
+        story.append(hdr_t2)
+        rows_data2 = []
+        for b in data["majlis_bills"]:
+            rows_data2.append([
+                Paragraph(b["event_name"], stys["cell"]),
+                Paragraph(PKR2(b["total_amount"]), stys["cell_r"]),
+                Paragraph(PKR2(b["cash_received"]), stys["bold_r"]),
+            ])
+        dt2 = Table(rows_data2, colWidths=cw2)
+        dt2.setStyle(TableStyle([
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LINEBELOW",     (0, 0), (-1, -1), 0.3, thin),
+            ("ALIGN",         (1, 0), (-1, -1), "RIGHT"),
+        ]))
+        story.append(dt2)
+    else:
+        story.append(Paragraph("  No majlis bills today.", stys["cell"]))
+
+    story.append(Spacer(1, 5*mm))
+
+    # ── Summary totals ─────────────────────────────────────────────────────
+    s = data["summary"]
+    sum_rows = [
+        ["Rent Billed",    PKR2(s["rent_billed"])],
+        ["Rent Collected", PKR2(s["rent_collected"])],
+        ["Majlis Billed",  PKR2(s["majlis_billed"])],
+        ["Majlis Collected", PKR2(s["majlis_collected"])],
+    ]
+    sum_data = [[Paragraph(lbl, stys["kv_lbl"]), Paragraph(val, stys["bold_r"])]
+                for lbl, val in sum_rows]
+    st = Table(sum_data, colWidths=[pw * 0.6, pw * 0.4])
+    st.setStyle(TableStyle([
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LINEBELOW",     (0, 0), (-1, -2), 0.3, thin),
+        ("ALIGN",         (1, 0), (-1, -1), "RIGHT"),
+    ]))
+    story.append(st)
+    story.append(Spacer(1, 2*mm))
+
+    # NET CASH IN bar
+    net_data = [[
+        Paragraph("NET CASH IN TODAY", stys["total_l"]),
+        Paragraph(PKR2(s["total_collected"]), stys["total_r"]),
+    ]]
+    net_t = Table(net_data, colWidths=[pw * 0.6, pw * 0.4])
+    net_t.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), DARK2),
+        ("TOPPADDING",    (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING",   (0, 0), (0, -1), 8),
+        ("RIGHTPADDING",  (-1, 0), (-1, -1), 8),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(net_t)
+
+    story.append(Spacer(1, 6*mm))
+    ts = datetime.now().strftime("%d %b %Y %H:%M")
+    story.append(HRFlowable(width="100%", thickness=0.5, color=BORDER2))
+    story.append(Spacer(1, 1*mm))
+    story.append(Paragraph(
+        f"Generated {ts} · NGO Accounting System · {data['trust_name']}",
+        stys["footer"],
+    ))
+
+    doc.build(story)
+    buf.seek(0)
+    fname = f"{data['trust_code']}_EOD_{data['date']}.pdf"
     return StreamingResponse(
         buf,
         media_type="application/pdf",
