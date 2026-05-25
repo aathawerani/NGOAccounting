@@ -56,6 +56,7 @@ function typeColor(type) {
 function TrialBalanceTab({ trustId, year }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const hasPeriod = year !== "all";
 
   const load = useCallback(async () => {
     if (!trustId) return;
@@ -74,10 +75,19 @@ function TrialBalanceTab({ trustId, year }) {
 
   function downloadCSV() {
     if (!data) return;
+    const headers = hasPeriod
+      ? ["Code", "Name", "Type", "Opening Balance", "Debit", "Credit", "Closing Balance"]
+      : ["Code", "Name", "Type", "Debit", "Credit", "Balance"];
     const rows = [
-      ["Code", "Name", "Type", "Debit", "Credit", "Balance"],
-      ...data.accounts.map((r) => [r.code, r.name, r.type, r.debit, r.credit, r.balance]),
-      ["", "", "TOTAL", data.total_debit, data.total_credit, ""],
+      headers,
+      ...data.accounts.map((r) =>
+        hasPeriod
+          ? [r.code, r.name, r.type, r.opening_balance, r.debit, r.credit, r.closing_balance]
+          : [r.code, r.name, r.type, r.debit, r.credit, r.balance]
+      ),
+      hasPeriod
+        ? ["", "", "TOTAL", "", data.total_debit, data.total_credit, ""]
+        : ["", "", "TOTAL", data.total_debit, data.total_credit, ""],
     ];
     const csv = rows.map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -107,14 +117,15 @@ function TrialBalanceTab({ trustId, year }) {
               <th className="px-4 py-3 text-left">Code</th>
               <th className="px-4 py-3 text-left">Account Name</th>
               <th className="px-4 py-3 text-left">Type</th>
+              {hasPeriod && <th className="px-4 py-3 text-right">Opening Bal.</th>}
               <th className="px-4 py-3 text-right">Debit (PKR)</th>
               <th className="px-4 py-3 text-right">Credit (PKR)</th>
-              <th className="px-4 py-3 text-right">Balance</th>
+              <th className="px-4 py-3 text-right">{hasPeriod ? "Closing Bal." : "Balance"}</th>
             </tr>
           </thead>
           <tbody>
             {data.accounts.map((row, i) => (
-              <tr key={row.code} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+              <tr key={row.code} className={`${row.is_zero ? "opacity-40" : ""} ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
                 <td className="px-4 py-2 font-mono text-xs text-gray-600">{row.code}</td>
                 <td className="px-4 py-2 text-gray-800">{row.name}</td>
                 <td className="px-4 py-2">
@@ -122,17 +133,22 @@ function TrialBalanceTab({ trustId, year }) {
                     {row.type}
                   </span>
                 </td>
+                {hasPeriod && (
+                  <td className={`px-4 py-2 text-right font-medium ${(row.opening_balance ?? 0) >= 0 ? "text-gray-700" : "text-red-600"}`}>
+                    {fmt(row.opening_balance ?? 0)}
+                  </td>
+                )}
                 <td className="px-4 py-2 text-right text-gray-700">{fmt(row.debit)}</td>
                 <td className="px-4 py-2 text-right text-gray-700">{fmt(row.credit)}</td>
-                <td className={`px-4 py-2 text-right font-medium ${row.balance >= 0 ? "text-gray-800" : "text-red-600"}`}>
-                  {fmt(row.balance)}
+                <td className={`px-4 py-2 text-right font-medium ${(hasPeriod ? (row.closing_balance ?? 0) : row.balance) >= 0 ? "text-gray-800" : "text-red-600"}`}>
+                  {fmt(hasPeriod ? (row.closing_balance ?? 0) : row.balance)}
                 </td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="bg-slate-800 text-white font-semibold">
-              <td colSpan={3} className="px-4 py-3 text-right text-sm">TOTALS</td>
+              <td colSpan={hasPeriod ? 4 : 3} className="px-4 py-3 text-right text-sm">TOTALS</td>
               <td className="px-4 py-3 text-right text-sm">{fmt(data.total_debit)}</td>
               <td className="px-4 py-3 text-right text-sm">{fmt(data.total_credit)}</td>
               <td className="px-4 py-3" />
@@ -179,35 +195,38 @@ function IncomeStatementTab({ trustId, year }) {
             <th className="px-4 py-3 text-left">Code</th>
             <th className="px-4 py-3 text-left">Account Name</th>
             <th className="px-4 py-3 text-right">Amount (PKR)</th>
+            <th className="px-4 py-3 text-right text-xs">% of Income</th>
           </tr>
         </thead>
         <tbody>
-          <SectionHeader label="INCOME" cols={3} />
+          <SectionHeader label="INCOME" cols={4} />
           {data.income.map((row, i) => (
-            <tr key={row.code} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+            <tr key={row.code} className={`${row.is_zero ? "opacity-40" : ""} ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
               <td className="px-4 py-2 font-mono text-xs text-gray-600">{row.code}</td>
               <td className="px-4 py-2 text-gray-800">{row.name}</td>
               <td className="px-4 py-2 text-right text-emerald-700 font-medium">{fmt(row.amount)}</td>
+              <td className="px-4 py-2 text-right text-gray-400 text-xs">{row.pct_of_income?.toFixed(1)}%</td>
             </tr>
           ))}
-          <TotalRow label="Total Income" value={data.total_income} cols={3} />
+          <TotalRow label="Total Income" value={data.total_income} cols={4} />
 
-          <tr><td colSpan={3} className="h-2" /></tr>
+          <tr><td colSpan={4} className="h-2" /></tr>
 
-          <SectionHeader label="EXPENSES" cols={3} />
+          <SectionHeader label="EXPENSES" cols={4} />
           {data.expenses.map((row, i) => (
-            <tr key={row.code} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+            <tr key={row.code} className={`${row.is_zero ? "opacity-40" : ""} ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
               <td className="px-4 py-2 font-mono text-xs text-gray-600">{row.code}</td>
               <td className="px-4 py-2 text-gray-800">{row.name}</td>
               <td className="px-4 py-2 text-right text-orange-700 font-medium">{fmt(row.amount)}</td>
+              <td className="px-4 py-2 text-right text-gray-400 text-xs">{row.pct_of_income?.toFixed(1)}%</td>
             </tr>
           ))}
-          <TotalRow label="Total Expenses" value={data.total_expense} cols={3} positive={false} />
+          <TotalRow label="Total Expenses" value={data.total_expense} cols={4} positive={false} />
 
-          <tr><td colSpan={3} className="h-2" /></tr>
+          <tr><td colSpan={4} className="h-2" /></tr>
 
           <tr className={`font-bold text-base ${surplus >= 0 ? "bg-emerald-700" : "bg-red-700"} text-white`}>
-            <td colSpan={2} className="px-4 py-3 text-right">
+            <td colSpan={3} className="px-4 py-3 text-right">
               {surplus >= 0 ? "NET SURPLUS" : "NET DEFICIT"}
             </td>
             <td className="px-4 py-3 text-right">{fmt(Math.abs(surplus))}</td>
@@ -242,6 +261,20 @@ function BalanceSheetTab({ trustId, year }) {
   if (loading) return <p className="text-center py-10 text-gray-500">Loading…</p>;
   if (!data) return null;
 
+  const py = data.prior_year;
+  const cols = py ? 4 : 3;
+
+  function BSRow({ row, colorClass, i }) {
+    return (
+      <tr className={`${row.is_zero ? "opacity-40" : ""} ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
+        <td className="px-4 py-2 font-mono text-xs text-gray-600">{row.code}</td>
+        <td className="px-4 py-2 text-gray-800">{row.name}</td>
+        <td className={`px-4 py-2 text-right font-medium ${colorClass}`}>{fmt(row.amount)}</td>
+        {py && <td className="px-4 py-2 text-right text-gray-400 text-xs">{row.prior_amount != null ? fmt(row.prior_amount) : "—"}</td>}
+      </tr>
+    );
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* Assets side */}
@@ -252,18 +285,24 @@ function BalanceSheetTab({ trustId, year }) {
               <th className="px-4 py-3 text-left">Code</th>
               <th className="px-4 py-3 text-left">Account</th>
               <th className="px-4 py-3 text-right">PKR</th>
+              {py && <th className="px-4 py-3 text-right text-xs">{py.year}</th>}
             </tr>
           </thead>
           <tbody>
-            <SectionHeader label="ASSETS" cols={3} />
+            <SectionHeader label="ASSETS" cols={cols} />
             {data.assets.map((row, i) => (
-              <tr key={row.code} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                <td className="px-4 py-2 font-mono text-xs text-gray-600">{row.code}</td>
-                <td className="px-4 py-2 text-gray-800">{row.name}</td>
-                <td className="px-4 py-2 text-right text-blue-700 font-medium">{fmt(row.amount)}</td>
-              </tr>
+              <BSRow key={row.code} row={row} colorClass="text-blue-700" i={i} />
             ))}
-            <TotalRow label="Total Assets" value={data.total_assets} cols={3} />
+            <tr className="bg-slate-800 text-white font-semibold">
+              <td colSpan={cols - 1} className="px-4 py-2 text-sm text-right">Total Assets</td>
+              <td className={`px-4 py-2 text-sm text-right ${data.total_assets >= 0 ? "text-emerald-400" : "text-red-400"}`}>{fmt(data.total_assets)}</td>
+            </tr>
+            {py && (
+              <tr className="bg-slate-700 text-white text-xs">
+                <td colSpan={cols - 1} className="px-4 py-1.5 text-right opacity-70">Prior Year ({py.year})</td>
+                <td className="px-4 py-1.5 text-right opacity-70">{fmt(py.total_assets)}</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -276,28 +315,30 @@ function BalanceSheetTab({ trustId, year }) {
               <th className="px-4 py-3 text-left">Code</th>
               <th className="px-4 py-3 text-left">Account</th>
               <th className="px-4 py-3 text-right">PKR</th>
+              {py && <th className="px-4 py-3 text-right text-xs">{py.year}</th>}
             </tr>
           </thead>
           <tbody>
-            <SectionHeader label="LIABILITIES" cols={3} />
+            <SectionHeader label="LIABILITIES" cols={cols} />
             {data.liabilities.map((row, i) => (
-              <tr key={row.code} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                <td className="px-4 py-2 font-mono text-xs text-gray-600">{row.code}</td>
-                <td className="px-4 py-2 text-gray-800">{row.name}</td>
-                <td className="px-4 py-2 text-right text-red-700 font-medium">{fmt(row.amount)}</td>
-              </tr>
+              <BSRow key={row.code} row={row} colorClass="text-red-700" i={i} />
             ))}
-            <TotalRow label="Total Liabilities" value={data.total_liab} cols={3} positive={false} />
-
-            <tr><td colSpan={3} className="h-2" /></tr>
-
-            <SectionHeader label="EQUITY / FUND" cols={3} />
-            {data.equity.map((row, i) => (
-              <tr key={row.code} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                <td className="px-4 py-2 font-mono text-xs text-gray-600">{row.code}</td>
-                <td className="px-4 py-2 text-gray-800">{row.name}</td>
-                <td className="px-4 py-2 text-right text-purple-700 font-medium">{fmt(row.amount)}</td>
+            <tr className="bg-slate-800 text-white font-semibold">
+              <td colSpan={cols - 1} className="px-4 py-2 text-sm text-right">Total Liabilities</td>
+              <td className="px-4 py-2 text-sm text-right text-red-400">{fmt(data.total_liab)}</td>
+            </tr>
+            {py && (
+              <tr className="bg-slate-700 text-white text-xs">
+                <td colSpan={cols - 1} className="px-4 py-1.5 text-right opacity-70">Prior Year ({py.year})</td>
+                <td className="px-4 py-1.5 text-right opacity-70">{fmt(py.total_liab)}</td>
               </tr>
+            )}
+
+            <tr><td colSpan={cols} className="h-2" /></tr>
+
+            <SectionHeader label="EQUITY / FUND" cols={cols} />
+            {data.equity.map((row, i) => (
+              <BSRow key={row.code} row={row} colorClass="text-purple-700" i={i} />
             ))}
             <tr className={data.net_profit >= 0 ? "bg-white" : "bg-red-50"}>
               <td className="px-4 py-2 font-mono text-xs text-gray-400">—</td>
@@ -305,8 +346,18 @@ function BalanceSheetTab({ trustId, year }) {
               <td className={`px-4 py-2 text-right font-medium ${data.net_profit >= 0 ? "text-emerald-700" : "text-red-700"}`}>
                 {fmt(data.net_profit)}
               </td>
+              {py && <td className="px-4 py-2 text-right text-gray-400 text-xs">{fmt(py.net_profit)}</td>}
             </tr>
-            <TotalRow label="Total Liab. & Equity" value={data.total_liab_equity} cols={3} />
+            <tr className="bg-slate-800 text-white font-semibold">
+              <td colSpan={cols - 1} className="px-4 py-2 text-sm text-right">Total Liab. &amp; Equity</td>
+              <td className={`px-4 py-2 text-sm text-right ${data.total_liab_equity >= 0 ? "text-emerald-400" : "text-red-400"}`}>{fmt(data.total_liab_equity)}</td>
+            </tr>
+            {py && (
+              <tr className="bg-slate-700 text-white text-xs">
+                <td colSpan={cols - 1} className="px-4 py-1.5 text-right opacity-70">Prior Year ({py.year})</td>
+                <td className="px-4 py-1.5 text-right opacity-70">{fmt(py.total_liab_equity)}</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

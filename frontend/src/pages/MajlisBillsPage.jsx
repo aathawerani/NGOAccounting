@@ -99,7 +99,7 @@ function ConfirmDialog({ bill, onConfirm, onCancel }) {
           <h3 className="font-semibold text-gray-900">Delete Bill?</h3>
         </div>
         <p className="text-sm text-gray-600 mb-6">
-          Bill #{bill.serial_no} for <strong>{bill.event_name || "—"}</strong> ({fmtDate(bill.date)}) will be permanently deleted along with its journal entries.
+          Bill #{bill.bill_no || bill.serial_no} for <strong>{bill.event_name || "—"}</strong> ({fmtDate(bill.date)}) will be permanently deleted along with its journal entries.
         </p>
         <div className="flex justify-end gap-3">
           <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
@@ -398,7 +398,7 @@ export default function MajlisBillsPage() {
                   </p>
                   <ul className="mt-1.5 space-y-0.5 text-xs text-amber-700">
                     {outstandingBills.slice(0, 5).map(b => (
-                      <li key={b.id}>#{b.serial_no} {b.event_name ? `— ${b.event_name}` : ""} — Balance: {PKR(b.shortfall)} ({b.cash_status})</li>
+                      <li key={b.id}>#{b.bill_no || b.serial_no} {b.event_name ? `— ${b.event_name}` : ""} — Balance: {PKR(b.shortfall)} ({b.cash_status})</li>
                     ))}
                     {outstandingBills.length > 5 && <li>…and {outstandingBills.length - 5} more</li>}
                   </ul>
@@ -641,7 +641,7 @@ export default function MajlisBillsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">#</th>
+                <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Bill No</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Date</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Hijri Date</th>
                 <th className="px-4 py-3 text-left font-medium text-gray-600 whitespace-nowrap">Event / Donor</th>
@@ -677,7 +677,7 @@ export default function MajlisBillsPage() {
                     "hover:bg-gray-50 transition-colors",
                     editingId === b.id && "bg-blue-50"
                   )}>
-                    <td className="px-4 py-3 font-mono text-gray-500">{b.serial_no}</td>
+                    <td className="px-4 py-3 font-mono text-gray-500 text-xs">{b.bill_no || b.serial_no}</td>
                     <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{fmtDate(b.date)}</td>
                     <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
                       {b.hijri_day && b.hijri_month ? `${b.hijri_day} ${b.hijri_month} ${b.hijri_year ?? ""}` : "—"}

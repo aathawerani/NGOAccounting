@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models.models import MajlisBill, Trust, LedgerEntry
+from sqlalchemy.orm import joinedload
 
 router = APIRouter(prefix="/api/majlis", tags=["majlis"])
 
@@ -66,6 +67,27 @@ def _next_serial(trust_id: int, db: Session) -> str:
         return "001"
 
 
+def _next_bill_no(trust_code: str, year: int, trust_id: int, db: Session) -> str:
+    """Generate next sequential bill_no like HVHT-MAJ-2025-0001."""
+    prefix = f"{trust_code}-MAJ-{year}-"
+    last = (
+        db.query(MajlisBill)
+        .filter(
+            MajlisBill.trust_id == trust_id,
+            MajlisBill.bill_no.like(f"{prefix}%"),
+        )
+        .order_by(MajlisBill.bill_no.desc())
+        .first()
+    )
+    if not last or not last.bill_no:
+        return f"{prefix}0001"
+    try:
+        suffix = int(last.bill_no.rsplit("-", 1)[-1])
+        return f"{prefix}{suffix + 1:04d}"
+    except (ValueError, IndexError):
+        return f"{prefix}0001"
+
+
 def _serialize(b: MajlisBill) -> dict:
     return {
         "id": b.id,
@@ -75,6 +97,7 @@ def _serialize(b: MajlisBill) -> dict:
         "hijri_month": b.hijri_month,
         "hijri_year": b.hijri_year,
         "serial_no": b.serial_no,
+        "bill_no": b.bill_no,
         "from_time": b.from_time,
         "to_time": b.to_time,
         "event_name": b.event_name,
@@ -178,7 +201,8 @@ def next_serial(trust_id: int, db: Session = Depends(get_db)):
 
 @router.post("", status_code=201)
 def create_bill(body: MajlisBillBody, db: Session = Depends(get_db)):
-    if not db.query(Trust).filter(Trust.id == body.trust_id).first():
+    trust = db.query(Trust).filter(Trust.id == body.trust_id).first()
+    if not trust:
         raise HTTPException(status_code=404, detail="Trust not found")
 
     milk_total, sugar_total, tea_total, total = _calc_totals(body)
@@ -192,6 +216,7 @@ def create_bill(body: MajlisBillBody, db: Session = Depends(get_db)):
         hijri_month=body.hijri_month,
         hijri_year=body.hijri_year,
         serial_no=_next_serial(body.trust_id, db),
+        bill_no=_next_bill_no(trust.code, body.date.year, body.trust_id, db),
         from_time=body.from_time,
         to_time=body.to_time,
         event_name=body.event_name,

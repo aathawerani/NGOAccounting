@@ -163,6 +163,93 @@ def _run_migrations():
             """)
             conn.commit()
             print("DB migration: created trust_settings table")
+
+        # rent_receipts — receipt_no sequential numbering
+        cursor.execute("PRAGMA table_info(rent_receipts)")
+        rr2_existing = {row[1] for row in cursor.fetchall()}
+        if "receipt_no" not in rr2_existing:
+            cursor.execute("ALTER TABLE rent_receipts ADD COLUMN receipt_no TEXT")
+            conn.commit()
+            # Backfill: assign TRUST-YEAR-NNNN ordered by date asc, id asc
+            from collections import defaultdict
+            cursor.execute("""
+                SELECT rr.id, rr.date, t.code
+                FROM rent_receipts rr
+                JOIN trusts t ON t.id = rr.trust_id
+                ORDER BY rr.trust_id, rr.date, rr.id
+            """)
+            rows = cursor.fetchall()
+            counters: dict = defaultdict(int)
+            updates = []
+            for row_id, row_date, trust_code in rows:
+                year = (row_date or "0000")[:4]
+                key = (trust_code, year)
+                counters[key] += 1
+                receipt_no = f"{trust_code}-{year}-{counters[key]:04d}"
+                updates.append((receipt_no, row_id))
+            if updates:
+                cursor.executemany(
+                    "UPDATE rent_receipts SET receipt_no = ? WHERE id = ?", updates
+                )
+                conn.commit()
+            print(f"DB migration: added receipt_no to rent_receipts, backfilled {len(updates)} records")
+
+        # majlis_bills — bill_no sequential numbering
+        cursor.execute("PRAGMA table_info(majlis_bills)")
+        mb2_existing = {row[1] for row in cursor.fetchall()}
+        if "bill_no" not in mb2_existing:
+            cursor.execute("ALTER TABLE majlis_bills ADD COLUMN bill_no TEXT")
+            conn.commit()
+            from collections import defaultdict
+            cursor.execute("""
+                SELECT mb.id, mb.date, t.code
+                FROM majlis_bills mb
+                JOIN trusts t ON t.id = mb.trust_id
+                ORDER BY mb.trust_id, mb.date, mb.id
+            """)
+            rows = cursor.fetchall()
+            counters2: dict = defaultdict(int)
+            updates2 = []
+            for row_id, row_date, trust_code in rows:
+                year = (row_date or "0000")[:4]
+                key = (trust_code, year)
+                counters2[key] += 1
+                bill_no = f"{trust_code}-MAJ-{year}-{counters2[key]:04d}"
+                updates2.append((bill_no, row_id))
+            if updates2:
+                cursor.executemany(
+                    "UPDATE majlis_bills SET bill_no = ? WHERE id = ?", updates2
+                )
+                conn.commit()
+            print(f"DB migration: added bill_no to majlis_bills, backfilled {len(updates2)} records")
+
+        # vouchers — reformat voucher_number to trust+type+year format
+        cursor.execute("SELECT COUNT(*) FROM vouchers WHERE voucher_number LIKE 'V-%'")
+        old_style_count = cursor.fetchone()[0]
+        if old_style_count > 0:
+            from collections import defaultdict
+            cursor.execute("""
+                SELECT v.id, v.date, v.voucher_type, t.code
+                FROM vouchers v
+                JOIN trusts t ON t.id = v.trust_id
+                ORDER BY v.trust_id, v.voucher_type, v.date, v.id
+            """)
+            rows = cursor.fetchall()
+            counters3: dict = defaultdict(int)
+            updates3 = []
+            for row_id, row_date, v_type, trust_code in rows:
+                year = (row_date or "0000")[:4]
+                v_suffix = "PV" if v_type == "Payment" else "RV"
+                key = (trust_code, v_suffix, year)
+                counters3[key] += 1
+                voucher_no = f"{trust_code}-{v_suffix}-{year}-{counters3[key]:04d}"
+                updates3.append((voucher_no, row_id))
+            if updates3:
+                cursor.executemany(
+                    "UPDATE vouchers SET voucher_number = ? WHERE id = ?", updates3
+                )
+                conn.commit()
+            print(f"DB migration: reformatted {len(updates3)} voucher numbers to new format")
     finally:
         conn.close()
 

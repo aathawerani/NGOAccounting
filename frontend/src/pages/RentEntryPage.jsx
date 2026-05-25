@@ -85,7 +85,7 @@ function ConfirmDialog({ receipt, onConfirm, onCancel }) {
           <h3 className="font-semibold text-gray-900">Delete Receipt?</h3>
         </div>
         <p className="text-sm text-gray-600 mb-6">
-          Receipt #{receipt.serial_no} for <strong>{receipt.tenant_name}</strong> ({fmtPeriod(receipt)}) will be permanently deleted.
+          Receipt #{receipt.receipt_no || receipt.serial_no} for <strong>{receipt.tenant_name}</strong> ({fmtPeriod(receipt)}) will be permanently deleted.
         </p>
         <div className="flex justify-end gap-3">
           <button onClick={onCancel} className="px-4 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">Cancel</button>
@@ -385,7 +385,7 @@ export default function RentEntryPage() {
         <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100">
           <Receipt className={cn("w-5 h-5", editing ? "text-amber-500" : "text-emerald-600")} />
           <h2 className="text-base font-semibold text-gray-900">
-            {editing ? `Editing Receipt #${editTarget.serial_no}` : "New Rent Receipt"}
+            {editing ? `Editing Receipt #${editTarget.receipt_no || editTarget.serial_no}` : "New Rent Receipt"}
           </h2>
           {!editing && (
             <span className="ml-auto text-xs text-gray-400 font-mono bg-gray-100 px-2 py-1 rounded">
@@ -489,7 +489,7 @@ export default function RentEntryPage() {
                 </p>
                 <ul className="mt-1.5 space-y-0.5 text-xs text-amber-700">
                   {tenantReceivables.map(r => (
-                    <li key={r.id}>#{r.serial_no} — {fmtDate(r.date)} — Balance: {PKR(r.shortfall)} ({r.cash_status})</li>
+                    <li key={r.id}>#{r.receipt_no || r.serial_no} — {fmtDate(r.date)} — Balance: {PKR(r.shortfall)} ({r.cash_status})</li>
                   ))}
                 </ul>
               </div>
@@ -830,7 +830,7 @@ export default function RentEntryPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                {["#","Date","Tenant","Space","Period","Rent+Water","Arrears","Total","Cash Recv","Balance",""].map((h, i) => (
+                {["Receipt No","Date","Tenant","Space","Period","Rent+Water","Arrears","Total","Cash Recv","Balance",""].map((h, i) => (
                   <th key={i} className={cn("px-4 py-3 font-medium text-gray-600 whitespace-nowrap text-xs", i >= 5 ? "text-right" : "text-left")}>{h}</th>
                 ))}
               </tr>
@@ -851,7 +851,7 @@ export default function RentEntryPage() {
                   const status    = r.cash_status ?? "PAID";
                   return (
                     <tr key={r.id} className={cn("hover:bg-gray-50 transition-colors", editTarget?.id === r.id && "bg-amber-50")}>
-                      <td className="px-4 py-3 font-mono text-gray-500 text-xs">{r.serial_no}</td>
+                      <td className="px-4 py-3 font-mono text-gray-500 text-xs">{r.receipt_no || r.serial_no}</td>
                       <td className="px-4 py-3 text-gray-700 whitespace-nowrap text-xs">{fmtDate(r.date)}</td>
                       <td className="px-4 py-3 font-medium text-gray-900 text-sm">{r.tenant_name}</td>
                       <td className="px-4 py-3 text-gray-600 whitespace-nowrap text-xs">{r.space_type} {r.space_number}</td>

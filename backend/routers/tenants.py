@@ -275,6 +275,7 @@ def tenant_statement(
         rows.append({
             "receipt_id": r.id,
             "serial_no": r.serial_no,
+            "receipt_no": r.receipt_no,
             "date": r.date.isoformat() if r.date else None,
             "period": (
                 f"{MONTHS[(r.from_date.month - 1) if r.from_date else 0]} "
@@ -410,7 +411,7 @@ def tenant_statement_pdf(
     table_data = []
     for row in data["rows"]:
         table_data.append([
-            Paragraph(row["serial_no"] or "—", stys["cell"]),
+            Paragraph(row.get("receipt_no") or row.get("serial_no") or "—", stys["cell"]),
             Paragraph(row["date"] or "—", stys["cell"]),
             Paragraph(row["period"], stys["cell"]),
             Paragraph(PKR(row["rent_due"]), stys["cell_r"]),

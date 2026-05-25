@@ -58,7 +58,8 @@ class RentReceipt(Base):
     id = Column(Integer, primary_key=True, index=True)
     trust_id = Column(Integer, ForeignKey("trusts.id"), nullable=False)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
-    serial_no = Column(String)              # "001", "042" — 3-digit zero-padded
+    serial_no = Column(String)              # "001", "042" — legacy 3-digit zero-padded
+    receipt_no = Column(String)             # "HTTT-2025-0001" — trust+year sequential
     date = Column(Date, nullable=False)     # receipt date
     plot_code = Column(String)
     space_type = Column(String)             # "SHOP" or "FLAT"
@@ -157,6 +158,7 @@ class MajlisBill(Base):
     hijri_month = Column(String)
     hijri_year = Column(String)
     serial_no = Column(String)
+    bill_no = Column(String)    # "HVHT-MAJ-2025-0001" — trust+year sequential
     from_time = Column(String)
     to_time = Column(String)
     event_name = Column(String)

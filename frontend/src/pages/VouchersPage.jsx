@@ -17,6 +17,7 @@ function fmtDate(iso) {
 
 const EMPTY = {
   date: TODAY,
+  voucher_number: "",
   account_code: "",
   contra_account_code: "CASH",
   being: "",
@@ -103,13 +104,18 @@ export default function VouchersPage() {
     }
   }, [selectedTrust]);
 
-  const fetchNextNumber = useCallback(async () => {
+  const fetchNextNumber = useCallback(async (voucherType = tab) => {
     if (!selectedTrust) return;
     try {
-      const res = await fetch(`${API}/api/vouchers/next-number?trust_id=${selectedTrust.id}`);
-      if (res.ok) setNextNumber((await res.json()).voucher_number);
+      const year = new Date().getFullYear();
+      const res = await fetch(`${API}/api/vouchers/next-number?trust_id=${selectedTrust.id}&voucher_type=${voucherType}&year=${year}`);
+      if (res.ok) {
+        const no = (await res.json()).voucher_number;
+        setNextNumber(no);
+        setForm(f => ({ ...f, voucher_number: f.voucher_number || no }));
+      }
     } catch { /* silent */ }
-  }, [selectedTrust]);
+  }, [selectedTrust, tab]);
 
   const fetchAccountTypes = useCallback(async () => {
     if (!selectedTrust) return;
@@ -143,7 +149,8 @@ export default function VouchersPage() {
   // Reset account_code when tab changes
   function switchTab(newTab) {
     setTab(newTab);
-    setForm((f) => ({ ...f, account_code: "" }));
+    setForm((f) => ({ ...f, account_code: "", voucher_number: "" }));
+    fetchNextNumber(newTab);
     if (editingId) cancelEdit();
   }
 
@@ -151,6 +158,7 @@ export default function VouchersPage() {
     setTab(v.voucher_type || "Payment");
     setForm({
       date: v.date,
+      voucher_number: v.voucher_number || "",
       account_code: v.account_code || "",
       contra_account_code: v.contra_account_code || "CASH",
       being: v.being || "",
@@ -173,6 +181,7 @@ export default function VouchersPage() {
     const payload = {
       trust_id: selectedTrust.id,
       date: form.date,
+      voucher_number: form.voucher_number?.trim() || null,
       voucher_type: tab,
       account_code: form.account_code,
       contra_account_code: form.contra_account_code || "CASH",
@@ -294,6 +303,14 @@ export default function VouchersPage() {
               <label className="block text-xs font-medium text-gray-700 mb-1">Date *</label>
               <input type="date" value={form.date} onChange={set("date")} required
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            </div>
+
+            {/* Voucher Number */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Voucher No.</label>
+              <input type="text" value={form.voucher_number} onChange={set("voucher_number")}
+                placeholder={nextNumber}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono" />
             </div>
 
             {/* Account (DR for Payment / CR for Receipt) */}

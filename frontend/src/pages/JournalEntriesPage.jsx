@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTrust } from "../context/TrustContext";
-import { Trash2, BookOpen, AlertCircle, PlusCircle, ListOrdered } from "lucide-react";
+import { Trash2, BookOpen, AlertCircle, PlusCircle, ListOrdered, Download } from "lucide-react";
 import { cn } from "../lib/utils";
 
 const API = "http://localhost:8000";
@@ -271,12 +271,15 @@ function TransactionsView({ trustId, onDelete }) {
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
+const CY = new Date().getFullYear();
 export default function JournalEntriesPage() {
   const { selectedTrust } = useTrust();
   const [tab, setTab] = useState("ledger"); // "ledger" | "transactions"
   const [accounts, setAccounts] = useState([]);
   const [selectedCode, setSelectedCode] = useState("");
   const [ledger, setLedger] = useState(null);
+  const [dateFrom, setDateFrom] = useState(`${CY}-01-01`);
+  const [dateTo, setDateTo] = useState(`${CY}-12-31`);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingLedger, setLoadingLedger] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -312,9 +315,13 @@ export default function JournalEntriesPage() {
     if (!selectedTrust || !selectedCode) return;
     setLoadingLedger(true);
     try {
-      const res = await fetch(
-        `${API}/api/accounts/ledger?trust_id=${selectedTrust.id}&account_code=${encodeURIComponent(selectedCode)}`
-      );
+      const params = new URLSearchParams({
+        trust_id: selectedTrust.id,
+        account_code: selectedCode,
+      });
+      if (dateFrom) params.set("date_from", dateFrom);
+      if (dateTo) params.set("date_to", dateTo);
+      const res = await fetch(`${API}/api/accounts/ledger?${params}`);
       if (!res.ok) throw new Error();
       setLedger(await res.json());
     } catch {
@@ -322,7 +329,7 @@ export default function JournalEntriesPage() {
     } finally {
       setLoadingLedger(false);
     }
-  }, [selectedTrust, selectedCode]);
+  }, [selectedTrust, selectedCode, dateFrom, dateTo]);
 
   useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
   useEffect(() => { fetchLedger(); }, [fetchLedger]);
@@ -375,6 +382,7 @@ export default function JournalEntriesPage() {
   const acctInfo = ledger?.account;
   const entries = ledger?.entries ?? [];
   const balance = ledger?.balance ?? 0;
+  const openingBalance = ledger?.opening_balance ?? 0;
 
   const TYPE_COLORS = {
     ASSET: "bg-blue-100 text-blue-700",
@@ -450,13 +458,27 @@ export default function JournalEntriesPage() {
                 {acctInfo.account_type}
               </span>
             )}
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+            <span className="text-gray-400 text-xs">to</span>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             {acctInfo && (
               <div className="text-right">
-                <p className="text-xs text-gray-500">Balance</p>
+                <p className="text-xs text-gray-500">Closing Balance</p>
                 <p className={cn("font-bold text-base", balance >= 0 ? "text-gray-900" : "text-red-600")}>
                   {PKR(Math.abs(balance))} {balance < 0 ? "CR" : "DR"}
                 </p>
               </div>
+            )}
+            {selectedCode && entries.length > 0 && (
+              <a
+                href={`${API}/api/accounts/ledger/excel?trust_id=${selectedTrust?.id}&account_code=${encodeURIComponent(selectedCode)}${dateFrom ? `&date_from=${dateFrom}` : ""}${dateTo ? `&date_to=${dateTo}` : ""}`}
+                target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-300 text-emerald-700 text-sm hover:bg-emerald-50 transition-colors"
+              >
+                <Download className="w-4 h-4" /> Excel
+              </a>
             )}
           </>
         )}
@@ -512,7 +534,20 @@ export default function JournalEntriesPage() {
                     </td>
                   </tr>
                 ) : (
-                  entries.map((e) => (
+                  <>
+                    {dateFrom && (
+                      <tr className="bg-blue-50 border-b border-blue-200">
+                        <td className="px-4 py-2 text-xs font-semibold text-blue-700 whitespace-nowrap">Opening Balance</td>
+                        <td colSpan={5} className="px-4 py-2 text-xs text-blue-500">{dateFrom}</td>
+                        <td />
+                        <td className="px-4 py-2 text-right font-bold text-blue-800 whitespace-nowrap">
+                          {PKR(Math.abs(openingBalance))}
+                          <span className="text-xs font-normal ml-1">{openingBalance < 0 ? "CR" : "DR"}</span>
+                        </td>
+                        <td />
+                      </tr>
+                    )}
+                    {entries.map((e) => (
                     <tr key={e.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 text-gray-700 whitespace-nowrap">{fmtDate(e.date)}</td>
                       <td className="px-4 py-3 font-mono text-gray-500">{e.receipt_no || "—"}</td>
@@ -547,7 +582,8 @@ export default function JournalEntriesPage() {
                         )}
                       </td>
                     </tr>
-                  ))
+                  ))}
+                  </>
                 )}
               </tbody>
               {entries.length > 0 && (

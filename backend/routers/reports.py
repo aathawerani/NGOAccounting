@@ -1,6 +1,6 @@
 """In-app financial reports: Trial Balance, Income Statement, Balance Sheet."""
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -63,6 +63,7 @@ def trial_balance(
 
     accounts = db.query(AccountType).filter(AccountType.trust_id == trust_id).order_by(AccountType.account_name).all()
     sums = _totals(trust_id, date_from, date_to, db)
+    open_sums = _totals(trust_id, None, date_from - timedelta(days=1), db) if date_from else {}
 
     rows = []
     total_dr = 0.0
@@ -71,18 +72,26 @@ def trial_balance(
         dr = round(sums[a.account_code]["debit"], 2)
         cr = round(sums[a.account_code]["credit"], 2)
         balance = round(dr - cr, 2)
-        if dr == 0 and cr == 0:
+        od = open_sums.get(a.account_code, {"debit": 0.0, "credit": 0.0})
+        open_bal = round(od["debit"] - od["credit"], 2)
+        closing_bal = round(open_bal + balance, 2)
+        is_zero = dr == 0 and cr == 0
+        if is_zero and open_bal == 0:
             continue
         rows.append({
             "code": a.account_code,
             "name": a.account_name,
             "type": a.account_type,
+            "opening_balance": open_bal,
             "debit": dr,
             "credit": cr,
             "balance": balance,
+            "closing_balance": closing_bal,
+            "is_zero": is_zero,
         })
-        total_dr += dr
-        total_cr += cr
+        if not is_zero:
+            total_dr += dr
+            total_cr += cr
 
     return {
         "accounts": rows,
@@ -118,12 +127,17 @@ def income_statement(
         cr = sums[a.account_code]["credit"]
         if a.account_type == "INCOME":
             amount = round(cr - dr, 2)
-            income_rows.append({"code": a.account_code, "name": a.account_name, "amount": amount})
+            income_rows.append({"code": a.account_code, "name": a.account_name, "amount": amount, "is_zero": amount == 0})
             total_income += amount
         elif a.account_type == "EXPENSE":
             amount = round(dr - cr, 2)
-            expense_rows.append({"code": a.account_code, "name": a.account_name, "amount": amount})
+            expense_rows.append({"code": a.account_code, "name": a.account_name, "amount": amount, "is_zero": amount == 0})
             total_expense += amount
+
+    for row in income_rows:
+        row["pct_of_income"] = round(row["amount"] / total_income * 100, 1) if total_income else 0.0
+    for row in expense_rows:
+        row["pct_of_income"] = round(row["amount"] / total_income * 100, 1) if total_income else 0.0
 
     return {
         "income": income_rows,
@@ -155,20 +169,59 @@ def balance_sheet(
     total_assets = total_liab = total_equity = 0.0
     income_total = expense_total = 0.0
 
+    # Prior year per-account amounts (only when year is specified)
+    py_amts: dict = {}
+    prior_year_data = None
+    if year:
+        py_from, py_to = _year_range(year - 1)
+        py_sums = _totals(trust_id, py_from, py_to, db)
+        py_assets = py_liab = py_equity = py_income = py_expense = 0.0
+        for a in accounts:
+            pdr = py_sums[a.account_code]["debit"]
+            pcr = py_sums[a.account_code]["credit"]
+            if a.account_type == "ASSET":
+                net = round(pdr - pcr, 2)
+                py_amts[a.account_code] = net
+                py_assets += net
+            elif a.account_type == "LIABILITY":
+                net = round(pcr - pdr, 2)
+                py_amts[a.account_code] = net
+                py_liab += net
+            elif a.account_type in ("EQUITY", "CAPITAL"):
+                net = round(pcr - pdr, 2)
+                py_amts[a.account_code] = net
+                py_equity += net
+            elif a.account_type == "INCOME":
+                py_income += pcr - pdr
+            elif a.account_type == "EXPENSE":
+                py_expense += pdr - pcr
+        py_net_profit = round(py_income - py_expense, 2)
+        prior_year_data = {
+            "year": year - 1,
+            "total_assets": round(py_assets, 2),
+            "total_liab": round(py_liab, 2),
+            "total_equity": round(py_equity, 2),
+            "net_profit": py_net_profit,
+            "total_liab_equity": round(py_liab + py_equity + py_net_profit, 2),
+        }
+
     for a in accounts:
         dr = sums[a.account_code]["debit"]
         cr = sums[a.account_code]["credit"]
         if a.account_type == "ASSET":
             net = round(dr - cr, 2)
-            asset_rows.append({"code": a.account_code, "name": a.account_name, "amount": net})
+            asset_rows.append({"code": a.account_code, "name": a.account_name, "amount": net,
+                                "prior_amount": py_amts.get(a.account_code), "is_zero": net == 0})
             total_assets += net
         elif a.account_type == "LIABILITY":
             net = round(cr - dr, 2)
-            liab_rows.append({"code": a.account_code, "name": a.account_name, "amount": net})
+            liab_rows.append({"code": a.account_code, "name": a.account_name, "amount": net,
+                               "prior_amount": py_amts.get(a.account_code), "is_zero": net == 0})
             total_liab += net
         elif a.account_type in ("EQUITY", "CAPITAL"):
             net = round(cr - dr, 2)
-            equity_rows.append({"code": a.account_code, "name": a.account_name, "amount": net})
+            equity_rows.append({"code": a.account_code, "name": a.account_name, "amount": net,
+                                 "prior_amount": py_amts.get(a.account_code), "is_zero": net == 0})
             total_equity += net
         elif a.account_type == "INCOME":
             income_total += cr - dr
@@ -186,6 +239,7 @@ def balance_sheet(
         "total_equity": round(total_equity, 2),
         "net_profit": net_profit,
         "total_liab_equity": round(total_liab + total_equity + net_profit, 2),
+        "prior_year": prior_year_data,
     }
 
 

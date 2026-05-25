@@ -76,12 +76,34 @@ def _next_serial(trust_id: int, db: Session) -> str:
         return "001"
 
 
+def _next_receipt_no(trust_code: str, year: int, trust_id: int, db: Session) -> str:
+    """Generate next sequential receipt_no like HTTT-2025-0001."""
+    prefix = f"{trust_code}-{year}-"
+    last = (
+        db.query(RentReceipt)
+        .filter(
+            RentReceipt.trust_id == trust_id,
+            RentReceipt.receipt_no.like(f"{prefix}%"),
+        )
+        .order_by(RentReceipt.receipt_no.desc())
+        .first()
+    )
+    if not last or not last.receipt_no:
+        return f"{prefix}0001"
+    try:
+        suffix = int(last.receipt_no.rsplit("-", 1)[-1])
+        return f"{prefix}{suffix + 1:04d}"
+    except (ValueError, IndexError):
+        return f"{prefix}0001"
+
+
 def _serialize(r: RentReceipt) -> dict:
     return {
         "id": r.id,
         "trust_id": r.trust_id,
         "tenant_id": r.tenant_id,
         "serial_no": r.serial_no,
+        "receipt_no": r.receipt_no,
         "date": r.date.isoformat() if r.date else None,
         "plot_code": r.plot_code,
         "space_type": r.space_type,
@@ -134,6 +156,8 @@ def _create_journal_entries(
 
     entries_to_add = []
 
+    ref_no = receipt.receipt_no or receipt.serial_no
+
     if rent_total > 0:
         key = f"rent-{receipt.id}"
         entries_to_add += [
@@ -141,7 +165,7 @@ def _create_journal_entries(
                 trust_id=receipt.trust_id,
                 account_code=debit_code,
                 date=receipt.date,
-                receipt_no=receipt.serial_no,
+                receipt_no=ref_no,
                 party_name=receipt.tenant_name,
                 contra_account_code=rent_code,
                 particulars=receipt.rent_particulars,
@@ -154,7 +178,7 @@ def _create_journal_entries(
                 trust_id=receipt.trust_id,
                 account_code=rent_code,
                 date=receipt.date,
-                receipt_no=receipt.serial_no,
+                receipt_no=ref_no,
                 party_name=receipt.tenant_name,
                 contra_account_code=debit_code,
                 particulars=receipt.rent_particulars,
@@ -172,7 +196,7 @@ def _create_journal_entries(
                 trust_id=receipt.trust_id,
                 account_code=debit_code,
                 date=receipt.date,
-                receipt_no=receipt.serial_no,
+                receipt_no=ref_no,
                 party_name=receipt.tenant_name,
                 contra_account_code=water_code,
                 particulars=receipt.water_particulars,
@@ -185,7 +209,7 @@ def _create_journal_entries(
                 trust_id=receipt.trust_id,
                 account_code=water_code,
                 date=receipt.date,
-                receipt_no=receipt.serial_no,
+                receipt_no=ref_no,
                 party_name=receipt.tenant_name,
                 contra_account_code=debit_code,
                 particulars=receipt.water_particulars,
@@ -328,6 +352,7 @@ def create_receipt(body: RentReceiptBody, db: Session = Depends(get_db)):
         trust_id=body.trust_id,
         tenant_id=body.tenant_id,
         serial_no=_next_serial(body.trust_id, db),
+        receipt_no=_next_receipt_no(trust.code, body.date.year, body.trust_id, db),
         date=body.date,
         plot_code=tenant.plot_code,
         space_type=tenant.space_type,
@@ -683,7 +708,7 @@ def receipt_pdf(receipt_id: int, db: Session = Depends(get_db)):
     doc = NGODoc(trust_name, trust_code, "RENT RECEIPT",
                  address=address, logo_b64=logo_b64)
     doc.add_header(
-        doc_number=r.serial_no or str(receipt_id),
+        doc_number=r.receipt_no or r.serial_no or str(receipt_id),
         doc_date=doc_date,
         hijri_date=h_date,
     )

@@ -17,27 +17,34 @@ router = APIRouter(prefix="/api/vouchers", tags=["vouchers"])
 class VoucherBody(BaseModel):
     trust_id: int
     date: date
-    voucher_type: str = "Payment"       # "Payment" | "Receipt"
-    account_code: str                    # DR (Payment) or CR (Receipt) account code
-    contra_account_code: str = "CASH"   # CR (Payment) or DR (Receipt) account code
+    voucher_number: Optional[str] = None  # auto-assigned if blank
+    voucher_type: str = "Payment"         # "Payment" | "Receipt"
+    account_code: str                     # DR (Payment) or CR (Receipt) account code
+    contra_account_code: str = "CASH"    # CR (Payment) or DR (Receipt) account code
     being: Optional[str] = None
     amount: float = 0.0
 
 
-def _next_voucher_no(trust_id: int, db: Session) -> str:
+def _next_voucher_no(trust_code: str, voucher_type: str, year: int, trust_id: int, db: Session) -> str:
+    """Generate next sequential voucher_number like HTTT-PV-2025-0001."""
+    v_suffix = "PV" if voucher_type == "Payment" else "RV"
+    prefix = f"{trust_code}-{v_suffix}-{year}-"
     last = (
         db.query(Voucher)
-        .filter(Voucher.trust_id == trust_id)
-        .order_by(Voucher.id.desc())
+        .filter(
+            Voucher.trust_id == trust_id,
+            Voucher.voucher_number.like(f"{prefix}%"),
+        )
+        .order_by(Voucher.voucher_number.desc())
         .first()
     )
     if not last or not last.voucher_number:
-        return "V-001"
+        return f"{prefix}0001"
     try:
-        num = int(last.voucher_number.replace("V-", ""))
-        return f"V-{(num % 9999) + 1:03d}"
-    except ValueError:
-        return "V-001"
+        suffix = int(last.voucher_number.rsplit("-", 1)[-1])
+        return f"{prefix}{suffix + 1:04d}"
+    except (ValueError, IndexError):
+        return f"{prefix}0001"
 
 
 def _serialize(v: Voucher) -> dict:
@@ -102,13 +109,18 @@ def list_vouchers(trust_id: Optional[int] = None, voucher_type: Optional[str] = 
 
 
 @router.get("/next-number")
-def next_number(trust_id: int, db: Session = Depends(get_db)):
-    return {"voucher_number": _next_voucher_no(trust_id, db)}
+def next_number(trust_id: int, voucher_type: str = "Payment", year: Optional[int] = None, db: Session = Depends(get_db)):
+    trust = db.query(Trust).filter(Trust.id == trust_id).first()
+    if not trust:
+        raise HTTPException(404, "Trust not found")
+    y = year or date.today().year
+    return {"voucher_number": _next_voucher_no(trust.code, voucher_type, y, trust_id, db)}
 
 
 @router.post("", status_code=201)
 def create_voucher(body: VoucherBody, db: Session = Depends(get_db)):
-    if not db.query(Trust).filter(Trust.id == body.trust_id).first():
+    trust = db.query(Trust).filter(Trust.id == body.trust_id).first()
+    if not trust:
         raise HTTPException(status_code=404, detail="Trust not found")
 
     acct = db.query(AccountType).filter(
@@ -117,10 +129,16 @@ def create_voucher(body: VoucherBody, db: Session = Depends(get_db)):
     ).first()
     account_name = acct.account_name if acct else body.account_code
 
+    assigned_no = (
+        body.voucher_number.strip()
+        if body.voucher_number and body.voucher_number.strip()
+        else _next_voucher_no(trust.code, body.voucher_type, body.date.year, body.trust_id, db)
+    )
+
     v = Voucher(
         trust_id=body.trust_id,
         date=body.date,
-        voucher_number=_next_voucher_no(body.trust_id, db),
+        voucher_number=assigned_no,
         voucher_type=body.voucher_type,
         account_code=body.account_code,
         account_name=account_name,

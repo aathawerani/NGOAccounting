@@ -523,3 +523,40 @@
 - `Sidebar.jsx`: Added "Trust Settings" link under Settings section
 - `App.jsx`: Imported `TrustSettingsPage`, added route case and page label
 - Frontend build: ✅ clean (522 kB JS, 1.10s)
+
+---
+
+### Session 2026-05-25 — TASK-045 through TASK-049
+
+**TASK-045: Rent receipt numbering**
+- `models/models.py`: Added `receipt_no = Column(String)` to `RentReceipt`
+- `main.py`: Migration adds `receipt_no` column if missing; backfills all existing records ordered by `trust_id, date, id` with format `{trust_code}-{year}-{n:04d}` using `defaultdict` counters
+- `routers/rent.py`: Added `_next_receipt_no(trust_code, year, trust_id, db)`; `_serialize` includes `receipt_no`; `create_receipt` auto-assigns receipt_no; `_create_journal_entries` uses `receipt_no` as `LedgerEntry.receipt_no`; `receipt_pdf` uses receipt_no in header
+- `routers/tenants.py`: Statement rows include `receipt_no`; PDF header uses receipt_no
+- `RentEntryPage.jsx`: Table header "Receipt No" instead of "#"; cells show `receipt_no || serial_no`
+
+**TASK-046: Majlis bill numbering**
+- `models/models.py`: Added `bill_no = Column(String)` to `MajlisBill`
+- `main.py`: Migration adds `bill_no` column; backfills with format `{trust_code}-MAJ-{year}-{n:04d}`
+- `routers/majlis.py`: Added `_next_bill_no(trust_code, year, trust_id, db)`; `_serialize` includes `bill_no`; `create_bill` auto-assigns bill_no; loads trust first via `joinedload`
+- `MajlisBillsPage.jsx`: Table header "Bill No"; cells show `bill_no || serial_no`
+
+**TASK-047: Account-wise ledger view**
+- `routers/accounts.py`: Extended `get_ledger` to compute `opening_balance` (sum of debit−credit for entries strictly before `date_from`); running balance starts from opening balance; response includes `opening_balance`
+- `routers/accounts.py`: Added `GET /api/accounts/ledger/excel` — openpyxl export with styled opening balance (blue), data rows, closing balance (green) rows
+- `JournalEntriesPage.jsx`: Added `dateFrom`/`dateTo` state (default CY-01-01 / CY-12-31); date range inputs in toolbar; Export Excel `<a>` link; Opening Balance row (blue-tinted) in tbody before entries; wrapped in JSX fragment
+
+**TASK-048: Voucher number auto-sequence**
+- `main.py`: Migration backfills old `V-NNN` style voucher_numbers to `{trust_code}-PV/RV-{year}-{n:04d}`
+- `routers/vouchers.py`: `VoucherBody` adds `voucher_number: Optional[str]`; rewrote `_next_voucher_no` to accept `trust_code, voucher_type, year`; `GET /next-number` accepts `voucher_type`+`year` params; `create_voucher` uses provided voucher_number or auto-generates; `update_voucher` preserves existing number
+- `VouchersPage.jsx`: `EMPTY` includes `voucher_number: ""`; `fetchNextNumber` auto-fills; `startEdit` copies existing number; `handleSubmit` sends `voucher_number`; form shows "Voucher No." input (editable, `font-mono`) after Date field
+
+**TASK-049: Report improvements**
+- `routers/reports.py`: Added `timedelta` import
+- `routers/reports.py` `trial_balance`: Computes `open_sums` (entries before `date_from`); each row gains `opening_balance`, `closing_balance`, `is_zero`; accounts with zero period AND zero opening balance are hidden; accounts with zero period but nonzero opening balance shown grayed (`is_zero: True`)
+- `routers/reports.py` `income_statement`: Adds `is_zero` flag and `pct_of_income` (% of total income) to each income/expense row
+- `routers/reports.py` `balance_sheet`: Adds `prior_amount` per row (when `year` set, from `year-1` data); adds `prior_year` dict (totals: assets/liab/equity/net_profit for prior year) to response
+- `ReportsPage.jsx` `TrialBalanceTab`: Shows Opening Bal. + Closing Bal. columns when year ≠ "all"; grays out `is_zero` rows; CSV download includes new columns
+- `ReportsPage.jsx` `IncomeStatementTab`: Added `% of Income` column (4th col); grays out zero-amount rows; NET SURPLUS row updated to span 3 cols
+- `ReportsPage.jsx` `BalanceSheetTab`: Shows `prior_year` column when year selected (per-account `prior_amount` + section prior-year totals rows); grays out `is_zero` rows; inline `BSRow` helper component
+- Frontend build: ✅ clean (527 kB JS, 1.09s)
