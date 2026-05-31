@@ -2,12 +2,13 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from database import get_db
-from models.models import MajlisBill, Trust, LedgerEntry
-from sqlalchemy.orm import joinedload
+from models.models import MajlisBill, Trust, LedgerEntry, AccountType
+from pdf_utils import NGODoc, hijri_str, amount_in_words
 
 router = APIRouter(prefix="/api/majlis", tags=["majlis"])
 
@@ -36,6 +37,7 @@ class MajlisBillBody(BaseModel):
     essence: float = 0.0
     miscellaneous: float = 0.0
     miscellaneous_desc: Optional[str] = None
+    particulars: Optional[str] = None
     lights_fans: float = 0.0
     gas: float = 0.0
     loud_speaker: float = 0.0
@@ -117,6 +119,7 @@ def _serialize(b: MajlisBill) -> dict:
         "essence": b.essence,
         "miscellaneous": b.miscellaneous,
         "miscellaneous_desc": b.miscellaneous_desc,
+        "particulars": b.particulars,
         "lights_fans": b.lights_fans,
         "gas": b.gas,
         "loud_speaker": b.loud_speaker,
@@ -158,7 +161,7 @@ def _create_journal_entries(bill: MajlisBill, debit_code: str, db: Session):
     donor = bill.event_name or "DONOR"
 
     if bill_except_ls > 0:
-        part = f"RECEIVED FROM {donor} FOR MAJLIS"
+        part = bill.particulars or f"RECEIVED FROM {donor} FOR MAJALIS"
         key = f"majl-{bill.id}"
         db.add(LedgerEntry(
             trust_id=bill.trust_id, account_code=debit_code, date=bill.date,
@@ -244,6 +247,7 @@ def create_bill(body: MajlisBillBody, db: Session = Depends(get_db)):
         cash_received=cash_recv,
         cash_status=_cash_status(cash_recv, total),
     )
+    bill.particulars = body.particulars or f"RECEIVED FROM {(body.event_name or 'DONOR').upper()} FOR MAJALIS"
     db.add(bill)
     db.commit()
     db.refresh(bill)
@@ -283,6 +287,7 @@ def update_bill(bill_id: int, body: MajlisBillBody, db: Session = Depends(get_db
     bill.essence = body.essence
     bill.miscellaneous = body.miscellaneous
     bill.miscellaneous_desc = body.miscellaneous_desc
+    bill.particulars = body.particulars or f"RECEIVED FROM {(body.event_name or 'DONOR').upper()} FOR MAJALIS"
     bill.lights_fans = body.lights_fans
     bill.gas = body.gas
     bill.loud_speaker = body.loud_speaker
@@ -340,3 +345,104 @@ def delete_bill(bill_id: int, db: Session = Depends(get_db)):
     _delete_journal_entries(bill_id, db)
     db.delete(bill)
     db.commit()
+
+
+@router.get("/{bill_id}/pdf")
+def majlis_bill_pdf(bill_id: int, db: Session = Depends(get_db)):
+    """Generate and return an A5 PDF for a single Majlis bill."""
+    bill = (
+        db.query(MajlisBill)
+        .options(joinedload(MajlisBill.trust))
+        .filter(MajlisBill.id == bill_id)
+        .first()
+    )
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+
+    trust = bill.trust
+    trust_name = trust.name if trust else "Trust"
+    trust_code = trust.code if trust else ""
+    doc_date = bill.date.strftime("%d %B %Y") if bill.date else "—"
+
+    # Hijri date: use stored fields if available, else auto-convert
+    if bill.hijri_day and bill.hijri_month and bill.hijri_year:
+        h_date = f"{bill.hijri_day} {bill.hijri_month} {bill.hijri_year} AH"
+    else:
+        h_date = hijri_str(bill.date) if bill.date else ""
+
+    # Trust settings for address / logo
+    address = ""
+    logo_b64 = ""
+    try:
+        from models.models import TrustSettings
+        ts = db.query(TrustSettings).filter(TrustSettings.trust_id == bill.trust_id).first()
+        if ts:
+            address = ts.address or ""
+            logo_b64 = ts.logo_base64 or ""
+    except Exception:
+        pass
+
+    doc = NGODoc(trust_name, trust_code, "MAJLIS BILL", address=address, logo_b64=logo_b64)
+    doc.add_header(
+        doc_number=bill.bill_no or f"MAJ-{bill_id}",
+        doc_date=doc_date,
+        hijri_date=h_date,
+    )
+
+    # Event details
+    time_str = ""
+    if bill.from_time or bill.to_time:
+        time_str = f"{bill.from_time or ''} — {bill.to_time or ''}".strip(" —")
+
+    kv = [("Event / Donor", bill.event_name or "—")]
+    if time_str:
+        kv.append(("Time", time_str))
+    kv.append(("Particulars", bill.particulars or "—"))
+    doc.add_kv_table(kv)
+
+    # Line items — only show rows with non-zero amounts
+    items = []
+    if (bill.milk_total or 0.0) > 0:
+        detail = f"{bill.milk_qty or 0:.2f} kg × PKR {bill.milk_price or 0:.2f}"
+        items.append(("Milk", detail, bill.milk_total or 0.0))
+    if (bill.sugar_total or 0.0) > 0:
+        detail = f"{bill.sugar_qty or 0:.2f} kg × PKR {bill.sugar_price or 0:.2f}"
+        items.append(("Sugar", detail, bill.sugar_total or 0.0))
+    if (bill.tea_total or 0.0) > 0:
+        detail = f"{bill.tea_qty or 0:.2f} kg × PKR {bill.tea_price or 0:.2f}"
+        items.append(("Tea", detail, bill.tea_total or 0.0))
+    for label, val in [
+        ("Saffron",         bill.saffron),
+        ("Cardamoms",       bill.cardamoms),
+        ("Pistachios",      bill.pistachios),
+        ("Ice",             bill.ice),
+        ("Essence / Colour", bill.essence),
+        ("Miscellaneous",   bill.miscellaneous),
+        ("Lights & Fans",   bill.lights_fans),
+        ("Gas",             bill.gas),
+        ("Loud Speaker",    bill.loud_speaker),
+        ("Molana",          bill.molana),
+    ]:
+        if (val or 0.0) > 0:
+            sub = bill.miscellaneous_desc if label == "Miscellaneous" and bill.miscellaneous_desc else ""
+            items.append((label, sub, val or 0.0))
+
+    if not items:
+        items.append(("Total Bill", "", bill.total_amount or 0.0))
+
+    doc.add_line_items(items, total=bill.total_amount or 0.0, words=True)
+    doc.add_payment_status_bar(
+        cash_status=bill.cash_status or "PAID",
+        cash_received=bill.cash_received or 0.0,
+        total_amount=bill.total_amount or 0.0,
+    )
+    doc.add_signature()
+    doc.add_footer_note(f"Generated by NGO Accounting System · {trust_name}")
+
+    buf = doc.build()
+    fname = f"majlis_{bill.bill_no or bill_id}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{fname}"'},
+    )

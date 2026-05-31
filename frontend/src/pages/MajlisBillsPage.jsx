@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTrust } from "../context/TrustContext";
 import { Trash2, BookOpen, AlertCircle, ChevronDown, ChevronUp, Pencil, X, AlertTriangle } from "lucide-react";
 import { cn } from "../lib/utils";
@@ -9,9 +9,9 @@ const PKR = (n) =>
   "PKR " + Number(n ?? 0).toLocaleString("en-PK", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
 const HIJRI_MONTHS = [
-  "Muharram", "Safar", "Rabi al-Awwal", "Rabi al-Thani",
-  "Jumada al-Awwal", "Jumada al-Thani", "Rajab", "Sha'ban",
-  "Ramadan", "Shawwal", "Dhu al-Qi'dah", "Dhu al-Hijjah",
+  "Muharram","Safar","Rabi-ul-Awwal","Rabi-ul-Thani",
+  "Jumada-ul-Awwal","Jumada-ul-Thani","Rajab","Shaban",
+  "Ramadan","Shawwal","Dhul-Qadah","Dhul-Hijjah",
 ];
 
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -33,7 +33,9 @@ const EMPTY = {
   hijri_year: "",
   from_time: "",
   to_time: "",
+  time_ampm: "PM",
   event_name: "",
+  particulars: "",
   milk_qty: "",
   milk_price: "",
   sugar_qty: "",
@@ -143,6 +145,39 @@ function StatCard({ label, value, sub }) {
   );
 }
 
+function gregorianToHijri(gYear, gMonth, gDay) {
+  const jd = Math.floor((14 - gMonth) / 12);
+  const y = gYear + 4800 - jd;
+  const m = gMonth + 12 * jd - 3;
+  let jdn = gDay + Math.floor((153 * m + 2) / 5) +
+            365 * y + Math.floor(y / 4) -
+            Math.floor(y / 100) + Math.floor(y / 400) - 32045;
+  const l  = jdn - 1948440 + 10632;
+  const n  = Math.floor((l - 1) / 10631);
+  const l2 = l - 10631 * n + 354;
+  const j  = Math.floor((10985 - l2) / 5316) * Math.floor((50 * l2) / 17719) +
+             Math.floor(l2 / 5670) * Math.floor((43 * l2) / 15238);
+  const l3 = l2 - Math.floor((30 - j) / 15) * Math.floor((17719 * j) / 50) -
+             Math.floor(j / 16) * Math.floor((15238 * j) / 43) + 29;
+  const hMonth = Math.floor((24 * l3) / 709);
+  const hDay   = l3 - Math.floor((709 * hMonth) / 24);
+  const hYear  = 30 * n + j - 30;
+  const HIJRI_MONTHS_LOCAL = [
+    "Muharram","Safar","Rabi-ul-Awwal","Rabi-ul-Thani",
+    "Jumada-ul-Awwal","Jumada-ul-Thani","Rajab","Shaban",
+    "Ramadan","Shawwal","Dhul-Qadah","Dhul-Hijjah"
+  ];
+  return { day: hDay, month: HIJRI_MONTHS_LOCAL[hMonth - 1], year: hYear };
+}
+
+const TIME_SLOTS = [
+  "5:00","5:30","6:00","6:30","7:00","7:30","8:00","8:30",
+  "9:00","9:30","10:00","10:30","11:00","11:30","12:00","12:30",
+  "1:00","1:30","2:00","2:30","3:00","3:30","4:00","4:30",
+  "5:00","5:30","6:00","6:30","7:00","7:30","8:00","8:30",
+  "9:00","9:30","10:00","10:30","11:00","11:30"
+];
+
 export default function MajlisBillsPage() {
   const { selectedTrust } = useTrust();
   const [bills, setBills] = useState([]);
@@ -156,6 +191,7 @@ export default function MajlisBillsPage() {
   const [form, setForm] = useState(EMPTY);
   const [showForm, setShowForm] = useState(true);
   const [editingId, setEditingId] = useState(null);
+  const particularsEditedRef = useRef(false);
 
   const addToast = (msg, type = "success") => {
     const id = Date.now();
@@ -210,8 +246,35 @@ export default function MajlisBillsPage() {
     fetchOutstanding();
   }, [fetchBills, fetchSerial, fetchCashAccounts, fetchOutstanding]);
 
+  useEffect(() => {
+    if (!particularsEditedRef.current) {
+      setForm(f => ({
+        ...f,
+        particulars: f.event_name
+          ? `RECEIVED FROM ${f.event_name.toUpperCase()} FOR MAJALIS`
+          : ""
+      }));
+    }
+  }, [form.event_name]);
+
+  useEffect(() => {
+    if (!form.date) return;
+    const [y, m, d] = form.date.split("-").map(Number);
+    if (!y || !m || !d) return;
+    const h = gregorianToHijri(y, m, d);
+    setForm(f => ({
+      ...f,
+      hijri_day:   String(h.day),
+      hijri_month: h.month,
+      hijri_year:  String(h.year),
+    }));
+  }, [form.date]);
+
   function startEdit(b) {
+    particularsEditedRef.current = true; // prevent auto-fill from overwriting loaded value
     const isNoCash = b.cash_status === "ADVANCE" || b.cash_received === 0;
+    const parseTimeVal = (t) => t ? t.replace(/ (AM|PM)$/i, "").trim() : "";
+    const parseAmPm   = (t) => t?.match(/ (AM|PM)$/i)?.[1]?.toUpperCase() || "PM";
     setForm({
       date: b.date,
       debitAccount: cashAccounts[0]?.account_code ?? "CASH",
@@ -223,9 +286,11 @@ export default function MajlisBillsPage() {
       hijri_day: b.hijri_day || "",
       hijri_month: b.hijri_month || "",
       hijri_year: b.hijri_year || "",
-      from_time: b.from_time || "",
-      to_time: b.to_time || "",
+      from_time: parseTimeVal(b.from_time),
+      to_time: parseTimeVal(b.to_time),
+      time_ampm: parseAmPm(b.from_time || b.to_time),
       event_name: b.event_name || "",
+      particulars: b.particulars || "",
       milk_qty: b.milk_qty || "",
       milk_price: b.milk_price || "",
       sugar_qty: b.sugar_qty || "",
@@ -250,6 +315,7 @@ export default function MajlisBillsPage() {
   }
 
   function cancelEdit() {
+    particularsEditedRef.current = false;
     setForm(EMPTY);
     setEditingId(null);
   }
@@ -270,9 +336,10 @@ export default function MajlisBillsPage() {
       hijri_day: form.hijri_day || null,
       hijri_month: form.hijri_month || null,
       hijri_year: form.hijri_year || null,
-      from_time: form.from_time || null,
-      to_time: form.to_time || null,
+      from_time: form.from_time ? `${form.from_time} ${form.time_ampm}` : null,
+      to_time:   form.to_time   ? `${form.to_time} ${form.time_ampm}`   : null,
       event_name: form.event_name || null,
+      particulars: form.particulars || null,
       milk_qty: n(form.milk_qty),
       milk_price: n(form.milk_price),
       sugar_qty: n(form.sugar_qty),
@@ -301,6 +368,7 @@ export default function MajlisBillsPage() {
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? "Failed");
       addToast(editingId ? "Bill updated" : "Bill recorded successfully");
+      particularsEditedRef.current = false;
       setForm(EMPTY);
       setEditingId(null);
       fetchBills();
@@ -417,11 +485,31 @@ export default function MajlisBillsPage() {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </Field>
               <Field label="Time">
-                <div className="flex gap-2">
-                  <input type="text" value={form.from_time} onChange={set("from_time")} placeholder="From"
-                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                  <input type="text" value={form.to_time} onChange={set("to_time")} placeholder="To"
-                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <div className="flex gap-2 items-center">
+                  <select
+                    value={form.from_time}
+                    onChange={e => setForm(f => ({ ...f, from_time: e.target.value }))}
+                    className="border rounded px-2 py-1 text-sm"
+                  >
+                    <option value="">From</option>
+                    {TIME_SLOTS.map((t, i) => <option key={"f"+i} value={t}>{t}</option>)}
+                  </select>
+                  <select
+                    value={form.to_time}
+                    onChange={e => setForm(f => ({ ...f, to_time: e.target.value }))}
+                    className="border rounded px-2 py-1 text-sm"
+                  >
+                    <option value="">To</option>
+                    {TIME_SLOTS.map((t, i) => <option key={"t"+i} value={t}>{t}</option>)}
+                  </select>
+                  <select
+                    value={form.time_ampm}
+                    onChange={e => setForm(f => ({ ...f, time_ampm: e.target.value }))}
+                    className="border rounded px-2 py-1 text-sm font-semibold"
+                  >
+                    <option value="AM">AM</option>
+                    <option value="PM">PM</option>
+                  </select>
                 </div>
               </Field>
               <Field label="Debit Account (DR)">
@@ -435,6 +523,21 @@ export default function MajlisBillsPage() {
                   ))}
                 </select>
               </Field>
+              <div className="col-span-full">
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Particulars
+                </label>
+                <input
+                  type="text"
+                  value={form.particulars}
+                  onChange={e => {
+                    particularsEditedRef.current = true;
+                    setForm(f => ({ ...f, particulars: e.target.value }));
+                  }}
+                  className="w-full border rounded px-3 py-1.5 text-sm"
+                  placeholder="Auto-filled from event name"
+                />
+              </div>
             </div>
 
             {/* Hijri date */}
@@ -515,10 +618,6 @@ export default function MajlisBillsPage() {
                 <Field label="Ice (PKR)"><NumInput value={form.ice} onChange={set("ice")} /></Field>
                 <Field label="Essence (PKR)"><NumInput value={form.essence} onChange={set("essence")} /></Field>
                 <Field label="Miscellaneous (PKR)"><NumInput value={form.miscellaneous} onChange={set("miscellaneous")} /></Field>
-                <Field label="Misc. Description" className="md:col-span-2">
-                  <input type="text" value={form.miscellaneous_desc} onChange={set("miscellaneous_desc")} placeholder="Description"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                </Field>
               </div>
             </div>
 
@@ -531,6 +630,20 @@ export default function MajlisBillsPage() {
                 <Field label="Loud Speaker (PKR)"><NumInput value={form.loud_speaker} onChange={set("loud_speaker")} /></Field>
                 <Field label="Molana Hadya (PKR)"><NumInput value={form.molana} onChange={set("molana")} /></Field>
               </div>
+            </div>
+
+            {/* Misc Expense Details */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Misc Expense Details
+              </label>
+              <input
+                type="text"
+                value={form.miscellaneous_desc}
+                onChange={e => setForm(f => ({ ...f, miscellaneous_desc: e.target.value }))}
+                className="w-full border rounded px-3 py-1.5 text-sm"
+                placeholder="Details of miscellaneous expenses"
+              />
             </div>
 
             {/* Accounting breakdown + submit */}
@@ -610,6 +723,15 @@ export default function MajlisBillsPage() {
                     >
                       <X className="w-4 h-4" />
                       Cancel Edit
+                    </button>
+                  )}
+                  {editingId && (
+                    <button
+                      type="button"
+                      onClick={() => window.open(`${API}/api/majlis/${editingId}/pdf`, "_blank")}
+                      className="flex items-center gap-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                    >
+                      🖨️ Print Bill
                     </button>
                   )}
                   <button
@@ -705,6 +827,13 @@ export default function MajlisBillsPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => window.open(`${API}/api/majlis/${b.id}/pdf`, "_blank")}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                          title="Print Bill"
+                        >
+                          🖨️
+                        </button>
                         <button
                           onClick={() => startEdit(b)}
                           className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"

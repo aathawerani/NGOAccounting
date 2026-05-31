@@ -137,6 +137,8 @@ def _run_migrations():
             mb_stmts.append("ALTER TABLE majlis_bills ADD COLUMN cash_received REAL")
         if "cash_status" not in mb_existing:
             mb_stmts.append("ALTER TABLE majlis_bills ADD COLUMN cash_status TEXT DEFAULT 'PAID'")
+        if "particulars" not in mb_existing:
+            mb_stmts.append("ALTER TABLE majlis_bills ADD COLUMN particulars TEXT")
         for s in mb_stmts:
             cursor.execute(s)
         if mb_stmts:

@@ -182,6 +182,7 @@ class MajlisBill(Base):
     essence = Column(Float, default=0.0)
     miscellaneous = Column(Float, default=0.0)
     miscellaneous_desc = Column(String)
+    particulars = Column(String, nullable=True)
     # Utilities & services
     lights_fans = Column(Float, default=0.0)
     gas = Column(Float, default=0.0)
